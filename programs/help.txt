@@ -1,0 +1,2 @@
+source /opt/homebrew/anaconda3/envs/ros_env/local_setup.bash
+

@@ -8,7 +8,9 @@ from PIL import Image
 from transformers import AutoProcessor, AutoModelForVision2Seq
 from transformers.image_utils import load_image
 from huggingface_hub import snapshot_download
-
+"""
+ValueError: Could not find module Idefics3ImageProcessor in `transformers`. If this is a custom class, it should be registered using the relevant `AutoClass.register()` function so that other functions can find it!
+"""
 class SmolVLMRAGPipeline:
     def __init__(self, model_path: str, device: str = "auto"):
         self.model_path = model_path
@@ -31,12 +33,12 @@ class SmolVLMRAGPipeline:
             self.model.eval()
             print("✅ SmolVLM model loaded successfully")
         except Exception as e:
-            print(f"❌ Error loading SmolVLM: {e}")
+            print("❌ Error loading SmolVLM: {}".format(e))
             traceback.print_exc()
             raise
 
     def load_images_from_directory(self, image_folder: str):
-        print(f"🔄 Loading images from {image_folder}...")
+        print("🔄 Loading images from {}...".format(image_folder))
         try:
             image_files = [f for f in os.listdir(image_folder) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
             all_images = {}
@@ -45,9 +47,9 @@ class SmolVLMRAGPipeline:
                 image = load_image(image_path)
                 all_images[image_id] = image
             self.all_images = all_images
-            print(f"✅ Loaded {len(all_images)} images")
+            print("✅ Loaded {len(all_images)} images")
         except Exception as e:
-            print(f"❌ Error loading images: {e}")
+            print("❌ Error loading images: {}".format(e))
             traceback.print_exc()
 
     def analyze_multiple_images(self, query: str) -> str:
@@ -81,7 +83,7 @@ class SmolVLMRAGPipeline:
             return response.strip()
         except Exception as e:
             traceback.print_exc()
-            return f"Error: {e}"
+            return "Error: {}".format(e)
 
 
 def main():
@@ -110,16 +112,16 @@ def main():
                     break
                 if not query:
                     continue
-                print(f"\n🔍 Processing query: {query}")
+                print("\n🔍 Processing query: {query}")
                 response = pipeline.analyze_multiple_images(query)
-                print(f"\n💡 Answer: {response}")
+                print("\n💡 Answer: {response}")
             except KeyboardInterrupt:
                 print("\n👋 Goodbye!")
                 break
             except Exception as e:
-                print(f"❌ Error: {e}")
+                print("❌ Error: {}".format(e))
     except Exception as e:
-        print(f"❌ Failed to initialize pipeline: {e}")
+        print("❌ Failed to initialize pipeline: {}".format(e))
 
 
 if __name__ == "__main__":

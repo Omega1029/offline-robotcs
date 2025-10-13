@@ -1,17 +1,12 @@
-import sys
 import os
 import traceback
-from pathlib import Path
 import torch
-from typing import List
-from PIL import Image
-from transformers import AutoProcessor, AutoModelForVision2Seq, AutoImageProcessor
+from transformers import AutoProcessor, AutoModelForVision2Seq, AutoModelForCausalLM
 from transformers.image_utils import load_image
 from huggingface_hub import snapshot_download
-"""
-ValueError: Could not find module Idefics3ImageProcessor in `transformers`. If this is a custom class, it should be registered using the relevant `AutoClass.register()` function so that other functions can find it!
-"""
-class SmolVLMRAGPipeline:
+
+
+class PhiVisionRAGPipeline:
     def __init__(self, model_path: str, device: str = "auto"):
         self.model_path = model_path
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -21,26 +16,25 @@ class SmolVLMRAGPipeline:
         self._setup_model()
 
     def _setup_model(self):
-        print("🔄 Loading SmolVLM model...")
+        print("🔄 Loading Phi-3 Vision model...")
         try:
-            AutoProcessor.register("idefics3", Idefics3ImageProcessor)
-            self.processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=True)
-
-            self.model = AutoModelForVision2Seq.from_pretrained(
+            self.processor = AutoProcessor.from_pretrained(
+                self.model_path, trust_remote_code=True
+            )
+            self.model = AutoModelForCausalLM.from_pretrained(
                 self.model_path,
                 torch_dtype=torch.bfloat16 if self.device == "cuda" else torch.float32,
-                _attn_implementation="flash_attention_2" if self.device == "cuda" else "eager",
                 trust_remote_code=True
             ).to(self.device)
             self.model.eval()
-            print("✅ SmolVLM model loaded successfully")
+            print("✅ Phi-3 Vision model loaded successfully")
         except Exception as e:
-            print("❌ Error loading SmolVLM: {}".format(e))
+            print(f"❌ Error loading Phi-3 Vision: {e}")
             traceback.print_exc()
             raise
 
     def load_images_from_directory(self, image_folder: str):
-        print("🔄 Loading images from {}...".format(image_folder))
+        print(f"🔄 Loading images from {image_folder}...")
         try:
             image_files = [f for f in os.listdir(image_folder) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
             all_images = {}
@@ -49,16 +43,16 @@ class SmolVLMRAGPipeline:
                 image = load_image(image_path)
                 all_images[image_id] = image
             self.all_images = all_images
-            print("✅ Loaded {len(all_images)} images")
+            print(f"✅ Loaded {len(all_images)} images")
         except Exception as e:
-            print("❌ Error loading images: {}".format(e))
+            print(f"❌ Error loading images: {e}")
             traceback.print_exc()
 
     def analyze_multiple_images(self, query: str) -> str:
         if not self.all_images:
             return "No images loaded."
 
-        MAX_IMGS = 4  # adjust based on VRAM
+        MAX_IMGS = 4  # adjust for VRAM
         all_imgs = list(self.all_images.values())
         used_images = all_imgs[:MAX_IMGS]
 
@@ -70,7 +64,8 @@ class SmolVLMRAGPipeline:
         try:
             RESERVE = 512
             prompt = self.processor.apply_chat_template(
-                messages, add_generation_prompt=True,
+                messages,
+                add_generation_prompt=True,
                 truncation=True,
                 max_length=max(getattr(self.model.config, "max_position_embeddings", 16384) - RESERVE, 32)
             )
@@ -85,21 +80,17 @@ class SmolVLMRAGPipeline:
             return response.strip()
         except Exception as e:
             traceback.print_exc()
-            return "Error: {}".format(e)
+            return f"Error: {e}"
 
-
-class Idefics3ImageProcessor(AutoImageProcessor):
-    model_input_names = ["pixel_values"]
 
 def main():
-    print("🚀 Starting SmolVLM-256M Instruct Multi-Image Pipeline...")
+    print("🚀 Starting Phi-3 Vision Multi-Image Pipeline...")
     try:
-        #HF_REPO = "SmolAI/SmolVLM-256M-Instruct"
-        HF_REPO = "ds4sd/SmolDocling-256M-preview"
-        LOCAL_DIR = "./SmolVLM-256M-Instruct"
+        HF_REPO = "microsoft/Phi-3-vision-128k-instruct"
+        LOCAL_DIR = "./Phi-3-vision-128k-instruct"
 
         if not os.path.exists(os.path.join(LOCAL_DIR, "config.json")):
-            print("📦 Downloading model from Hugging Face...")
+            print("📦 Downloading Phi-3 Vision model from Hugging Face...")
             snapshot_download(
                 repo_id=HF_REPO,
                 local_dir=LOCAL_DIR,
@@ -107,7 +98,7 @@ def main():
             )
             print("✅ Model downloaded to:", LOCAL_DIR)
 
-        pipeline = SmolVLMRAGPipeline(model_path=LOCAL_DIR)
+        pipeline = PhiVisionRAGPipeline(model_path=LOCAL_DIR)
         pipeline.load_images_from_directory("captured_frames/captured_frames")
 
         while True:
@@ -117,16 +108,16 @@ def main():
                     break
                 if not query:
                     continue
-                print("\n🔍 Processing query: {query}")
+                print(f"\n🔍 Processing query: {query}")
                 response = pipeline.analyze_multiple_images(query)
-                print("\n💡 Answer: {response}")
+                print(f"\n💡 Answer: {response}")
             except KeyboardInterrupt:
                 print("\n👋 Goodbye!")
                 break
             except Exception as e:
-                print("❌ Error: {}".format(e))
+                print(f"❌ Error: {e}")
     except Exception as e:
-        print("❌ Failed to initialize pipeline: {}".format(e))
+        print(f"❌ Failed to initialize pipeline: {e}")
 
 
 if __name__ == "__main__":

@@ -53,9 +53,10 @@ class CombinedRobotVision(Node):
             ("stop", 0.0, 1.0),
             ("left", 0.5, 2.0),
             ("stop", 0.0, 1.0),
-            ("right", 0.5, 2.0),
+            ("right", 0.5, 4.0),
             ("stop", 0.0, 1.0),
-            ("backward", 0.2, 3.0),
+            ("left", 0.5, 2.0),
+            #("backward", 0.2, 3.0),
             ("stop", 0.0, 1.0),
         ]
         self.current_action_index = 0

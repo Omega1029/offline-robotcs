@@ -3,5 +3,9 @@ Smol*
 ubuntu*
 turtlebot*
 .idea*
-captured_frames*
+#captured_frames*
+MiniCPM-V-2_6/
+Phi-3-vision-128k-instruct/
+llama.cpp/
+
 

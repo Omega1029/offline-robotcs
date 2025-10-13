@@ -105,7 +105,7 @@ Each JSON file should include:
 Run the training script to fine-tune SmolVLM on your dataset:
 
 ```bash
-python finetune_smolvla.py
+python fine_tune_robot_actions.py
 ```
 
 The model will be saved under:
@@ -190,7 +190,7 @@ If you use SmolVLA or reference this work, please cite:
 
 **Justin Williams**
 Ph.D. Candidate in Cyber-Physical Systems, Clark Atlanta University
-[LinkedIn](https://www.linkedin.com/in/) | [Website](https://yourwebsite.com)
+[LinkedIn](https://www.linkedin.com/in/justin-williams-a35581138/) | [Website](https://yourwebsite.com)
 
 ---
 

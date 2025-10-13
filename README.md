@@ -1,6 +1,4 @@
 
-
-````markdown
 # 🤖 SmolVLA: Edge-Deployed Vision-Language-Action System
 
 SmolVLA (Small Vision-Language-Action) is a lightweight **Edge AI framework** that enables mobile robots to **see, reason, and act** directly from visual input — entirely **on-device**.  
@@ -203,8 +201,3 @@ Special thanks to **Dr. Gupta** for advisory support and research mentorship.
 
 ---
 
-```
-
-Would you like me to make this README include **images and diagrams** (like a system block diagram or training flowchart in Markdown)?  
-That version looks stunning on GitHub and communicates your research visually.
-```

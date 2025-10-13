@@ -69,11 +69,7 @@ if len(examples) == 0:
     raise RuntimeError("No valid samples after pairing. Check JSON contents and keys.")
 
 dataset = Dataset.from_list(examples)
-if len(dataset) > 1:
-    train_test = dataset.train_test_split(test_size=0.15)
-    train_ds, eval_ds = train_test["train"], train_test["test"]
-else:
-    train_ds, eval_ds = dataset, dataset
+train_ds, eval_ds = dataset, dataset
 
 print(f"Loaded {len(train_ds)} training and {len(eval_ds)} validation samples.\n")
 
@@ -113,34 +109,58 @@ image_token_id = processor.tokenizer.additional_special_tokens_ids[
 ]
 
 def collate_fn(examples):
-    texts, images = [], []
-    for ex in examples:
-        try:
-            image = Image.open(ex["image"])
-            if image.mode != 'RGB':
-                image = image.convert('RGB')
-        except Exception as e:
-            print(f"Could not open image {ex['image']}: {e}")
-            continue
+    texts, images, labels = [], [], []
 
-        # image → caption training pair
+    for ex in examples:
+        image = Image.open(ex["image"]).convert("RGB")
+
         messages = [
-            {"role": "user",
-             "content": [{"type": "image"},
-                         {"type": "text", "text": "Predict the robot action."}]},
-            {"role": "assistant",
-             "content": [{"type": "text", "text": ex["caption"]}]}
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image"},
+                    {"type": "text", "text": "Frame captured by TurtleBot. Respond with only the exact robot_action value."},
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": ex["caption"]},
+                ],
+            },
         ]
-        text = processor.apply_chat_template(messages, add_generation_prompt=False)
-        texts.append(text.strip())
-        images.append([image])
+
+        # Create the conversation text
+        conversation = processor.apply_chat_template(
+            messages, add_generation_prompt=False, tokenize=False
+        )
+        texts.append(conversation)
+        images.append(image)
 
     batch = processor(text=texts, images=images, return_tensors="pt", padding=True)
+
+    # Copy labels from input_ids
     labels = batch["input_ids"].clone()
+
+    # Mask <pad> tokens
     labels[labels == processor.tokenizer.pad_token_id] = -100
+
+    # Mask <image> tokens
+    image_token_id = processor.tokenizer.convert_tokens_to_ids("<image>")
     labels[labels == image_token_id] = -100
+
+    # 🧩 Here's the critical fix:
+    # Mask out everything *before* the assistant turn (i.e., the user input)
+    for i, text in enumerate(texts):
+        user_text = text.split("Assistant:")[0]
+        user_token_count = len(processor.tokenizer(user_text).input_ids)
+        labels[i, :user_token_count] = -100
+
     batch["labels"] = labels
     return batch
+
+
+
 
 # Sanity test the collator
 print("Testing collate_fn with one sample...")
@@ -156,19 +176,22 @@ except Exception as e:
 print("Setting up trainer...")
 
 training_args = TrainingArguments(
-    num_train_epochs=1,
+    num_train_epochs=10,               # 🔥 more epochs — memorize the tiny dataset
     per_device_train_batch_size=1,
-    gradient_accumulation_steps=4,
-    learning_rate=5e-5,
-    logging_steps=10,
-    save_strategy="epoch",
-    bf16=False,
-    fp16=False,
-    output_dir="./smolvlm_turtlebot_action",
+    gradient_accumulation_steps=1,     # no accumulation — update each step
+    learning_rate=5e-4,                # higher LR = faster memorization
+    warmup_steps=0,
+    weight_decay=0.0,                  # no regularization
+    logging_steps=1,                   # log every step
+    save_strategy="no",                # skip checkpoint overhead
+    fp16=torch.cuda.is_available(),
+    output_dir="./smolvlm_turtlebot_action_overfit",
     report_to="none",
     remove_unused_columns=False,
-    gradient_checkpointing=False
+    gradient_checkpointing=False,
+    max_steps=-1
 )
+
 
 trainer = Trainer(
     model=model,
@@ -204,9 +227,24 @@ print("Running quick inference test...")
 
 test_img = train_ds[0]["image"]
 img = Image.open(test_img)
-inputs = processor(images=[img], text=["Predict the robot action."], return_tensors="pt").to(DEVICE)
+messages = [
+    {
+        "role": "user",
+        "content": [
+            {"type": "image"},
+            {"type": "text",
+             "text": "Frame captured by TurtleBot. Respond with only the exact robot_action value, e.g., forward_0.2_3.0s."}
+        ],
+    },
+]
 
-outputs = model.generate(**inputs, max_new_tokens=15)
+prompt = processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
+inputs = processor(images=[img], text=[prompt], return_tensors="pt").to(DEVICE)
+
+with torch.inference_mode():
+    outputs = model.generate(**inputs, max_new_tokens=15)
+
 result = processor.batch_decode(outputs, skip_special_tokens=True)[0]
 print("Predicted:", result)
+
 print("From image:", os.path.basename(test_img))

@@ -85,7 +85,7 @@ balanced_examples = []
 
 for k, v in actions_dict.items():
     random.shuffle(v)
-    if k == "backward":
+    if k == " ":
         # Keep all backward samples (smaller class)
         balanced_examples.extend(v)
         print(f"Keeping all {len(v)} samples for '{k}'")

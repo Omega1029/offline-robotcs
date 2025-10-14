@@ -173,7 +173,6 @@ def collate_fn(examples):
     return batch
 
 _ = collate_fn([train_ds[0]])
-input()
 print("✅ Collate function verified.\n")
 
 # ================================================================

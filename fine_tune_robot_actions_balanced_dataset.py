@@ -13,6 +13,10 @@ from transformers import (
 )
 from peft import LoraConfig, get_peft_model
 
+EPOCHS = 1
+TARGET_COUNT = 50  # Match the 'right' class size
+
+
 # ================================================================
 # 1. PREPARE DATASET (index-pair JPG[i] ↔ JSON[i])
 # ================================================================
@@ -70,7 +74,7 @@ for k, v in actions_dict.items():
 # ================================================================
 # 3. BALANCE CLASSES (REMOVE 'sequence', KEEP backward FULL, others → 2990)
 # ================================================================
-TARGET_COUNT = 2990  # Match the 'right' class size
+
 
 # Remove 'sequence' class entirely
 if "sequence" in actions_dict:
@@ -178,7 +182,7 @@ print("✅ Collate function verified.\n")
 # ================================================================
 # 6. TRAINING SETUP
 # ================================================================
-EPOCHS = 1
+
 training_args = TrainingArguments(
     num_train_epochs=EPOCHS,
     per_device_train_batch_size=1,

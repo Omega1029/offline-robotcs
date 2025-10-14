@@ -27,13 +27,13 @@
   "rank_pattern": {},
   "revision": null,
   "target_modules": [
-    "down_proj",
-    "up_proj",
-    "v_proj",
-    "k_proj",
     "o_proj",
-    "gate_proj",
-    "q_proj"
+    "q_proj",
+    "down_proj",
+    "v_proj",
+    "up_proj",
+    "k_proj",
+    "gate_proj"
   ],
   "task_type": null,
   "trainable_token_indices": null,

@@ -60,7 +60,7 @@ for file in os.listdir(dir):
     if "Assistant:" in result:
         result = result.split("Assistant:")[-1].strip()
 
-    if 'stop' in result:
+    if 'stop' in result or 'forward':
         continue
     print("Predicted:", result)
     print("From image:", os.path.basename(test_img))

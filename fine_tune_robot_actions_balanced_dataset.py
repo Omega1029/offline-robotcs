@@ -178,8 +178,9 @@ print("✅ Collate function verified.\n")
 # ================================================================
 # 6. TRAINING SETUP
 # ================================================================
+EPOCHS = 1
 training_args = TrainingArguments(
-    num_train_epochs=10,
+    num_train_epochs=EPOCHS,
     per_device_train_batch_size=1,
     gradient_accumulation_steps=1,
     learning_rate=5e-4,

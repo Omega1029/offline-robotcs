@@ -13,8 +13,8 @@ from transformers import (
 )
 from peft import LoraConfig, get_peft_model
 
-EPOCHS = 1
-TARGET_COUNT = 50  # Match the 'right' class size
+EPOCHS = 10
+TARGET_COUNT = 2990  # Match the 'right' class size
 
 
 # ================================================================
@@ -84,8 +84,8 @@ if "sequence" in actions_dict:
 balanced_examples = []
 
 for k, v in actions_dict.items():
-    random.shuffle(v)
-    if k == " ":
+    #random.shuffle(v)
+    if k == "backward":
         # Keep all backward samples (smaller class)
         balanced_examples.extend(v)
         print(f"Keeping all {len(v)} samples for '{k}'")

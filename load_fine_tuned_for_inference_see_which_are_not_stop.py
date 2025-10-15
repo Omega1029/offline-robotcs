@@ -9,7 +9,7 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 # ================================================================
 #  Load processor and base model
 # ================================================================
-ft_dir = "./smolvlm_turtlebot_action_ft"
+ft_dir = "./smolvlm_turtlebot_action_balanced"
 print(f"Loading fine-tuned model from: {ft_dir}")
 
 # Load processor

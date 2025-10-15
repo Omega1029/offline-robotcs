@@ -54,7 +54,7 @@ for file in os.listdir(dir):
     inputs = processor(images=[img], text=[prompt], return_tensors="pt").to(DEVICE)
 
     with torch.inference_mode():
-        outputs = model.generate(**inputs, max_new_tokens=15, temperature=0.8, top_p=0.9)
+        outputs = model.generate(**inputs, max_new_tokens=15)
 
     result = processor.batch_decode(outputs, skip_special_tokens=True)[0]
     if "Assistant:" in result:

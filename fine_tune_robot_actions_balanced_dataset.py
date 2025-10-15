@@ -77,34 +77,42 @@ for k, v in actions_dict.items():
 
 
 # Remove 'sequence' class entirely
+random.seed(42)
+
+# --- Balance by downsampling every class to the min count (excluding 'sequence')
 if "sequence" in actions_dict:
-    print(f"Removing 'sequence' class ({len(actions_dict['sequence'])} samples)")
     del actions_dict["sequence"]
 
-balanced_examples = []
+class_counts = {k: len(v) for k, v in actions_dict.items()}
+target = min(class_counts.values())  # simplest fair target
 
+balanced = []
 for k, v in actions_dict.items():
-    #random.shuffle(v)
-    if k == "backward":
-        # Keep all backward samples (smaller class)
-        balanced_examples.extend(v)
-        print(f"Keeping all {len(v)} samples for '{k}'")
-    else:
-        # Downsample others to target count
-        new_count = min(len(v), TARGET_COUNT)
-        balanced_examples.extend(v[:new_count])
-        print(f"Downsampled '{k}' to {new_count} samples")
+    v_shuf = v[:]  # copy
+    random.shuffle(v_shuf)
+    take = v_shuf[:target]
+    for ex in take:
+        ex["action_type"] = k
+    balanced.extend(take)
 
-# Report final distribution
-print("\n✅ Final action counts:")
+# Stratified 85/15 split
+train_examples, eval_examples = [], []
 for k in actions_dict.keys():
-    count = len([e for e in balanced_examples if e["caption"].startswith(k)])
-    print(f"  {k}: {count}")
+    group = [e for e in balanced if e["action_type"] == k]
+    random.shuffle(group)
+    cut = int(0.85 * len(group))
+    train_examples.extend(group[:cut])
+    eval_examples.extend(group[cut:])
 
-print(f"✅ Total balanced dataset size: {len(balanced_examples)} samples\n")
+train_ds = Dataset.from_list(train_examples)
+eval_ds  = Dataset.from_list(eval_examples)
 
-dataset = Dataset.from_list(balanced_examples)
-train_ds, eval_ds = dataset, dataset
+print("Final per-class counts (train):",
+      {k: sum(1 for e in train_examples if e["action_type"]==k) for k in actions_dict})
+print("Final per-class counts (eval):",
+      {k: sum(1 for e in eval_examples  if e["action_type"]==k) for k in actions_dict})
+print("Total:", len(train_ds), "+", len(eval_ds))
+
 
 # ================================================================
 # 4. MODEL + PROCESSOR SETUP
@@ -125,8 +133,8 @@ model = Idefics3ForConditionalGeneration.from_pretrained(
 
 # LoRA setup
 lora_config = LoraConfig(
-    r=8,
-    lora_alpha=8,
+    r=16,
+    lora_alpha=32,
     lora_dropout=0.1,
     target_modules=['down_proj','o_proj','k_proj','q_proj','gate_proj','up_proj','v_proj'],
     init_lora_weights="gaussian"
@@ -139,42 +147,45 @@ print("Trainable parameters:", model.get_nb_trainable_parameters(), "\n")
 # ================================================================
 def collate_fn(examples):
     texts, images = [], []
-
     for ex in examples:
         image = Image.open(ex["image"]).convert("RGB")
-
         messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image"},
-                    {"type": "text", "text": "Frame captured by TurtleBot. Respond with only the exact robot_action value."},
-                ],
-            },
-            {
-                "role": "assistant",
-                "content": [{"type": "text", "text": ex["caption"]}],
-            },
+            {"role": "user", "content": [{"type": "image"},
+                {"type":"text","text":"Frame captured by TurtleBot. Respond with only the exact robot_action value."}]},
+            {"role": "assistant", "content": [{"type":"text","text": ex["caption"]}]},
         ]
-
-        conversation = processor.apply_chat_template(messages, add_generation_prompt=False, tokenize=False)
+        conversation = processor.apply_chat_template(
+            messages, add_generation_prompt=False, tokenize=False
+        )
         texts.append(conversation)
         images.append(image)
 
     batch = processor(text=texts, images=images, return_tensors="pt", padding=True)
-    labels = batch["input_ids"].clone()
+    input_ids = batch["input_ids"]
+
+    # Build labels: mask everything up to the start of the assistant’s reply
+    labels = input_ids.clone()
     labels[labels == processor.tokenizer.pad_token_id] = -100
     image_token_id = processor.tokenizer.convert_tokens_to_ids("<image>")
     labels[labels == image_token_id] = -100
 
-    # Mask user input
-    for i, text in enumerate(texts):
-        user_text = text.split("Assistant:")[0]
-        user_tokens = processor.tokenizer(user_text).input_ids
-        labels[i, :len(user_tokens)] = -100
+    # Determine assistant start per sample by tokenizing the user-only portion
+    for i, ex in enumerate(examples):
+        # Rebuild the same messages but WITHOUT the assistant part to get its length
+        user_only = [
+            {"role": "user", "content": [{"type":"image"},
+                {"type":"text","text":"Frame captured by TurtleBot. Respond with only the exact robot_action value."}]}
+        ]
+        user_text = processor.apply_chat_template(
+            user_only, add_generation_prompt=False, tokenize=False
+        )
+        user_ids = processor.tokenizer(user_text, return_tensors="pt").input_ids.squeeze(0)
+        user_len = user_ids.size(0)
+        labels[i, :user_len] = -100
 
     batch["labels"] = labels
     return batch
+
 
 _ = collate_fn([train_ds[0]])
 print("✅ Collate function verified.\n")
@@ -186,7 +197,7 @@ print("✅ Collate function verified.\n")
 training_args = TrainingArguments(
     num_train_epochs=EPOCHS,
     per_device_train_batch_size=1,
-    gradient_accumulation_steps=1,
+    gradient_accumulation_steps=4,
     learning_rate=5e-4,
     warmup_steps=0,
     weight_decay=0.0,

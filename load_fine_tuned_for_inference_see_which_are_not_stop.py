@@ -9,7 +9,7 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 # ================================================================
 #  Load processor and base model
 # ================================================================
-ft_dir = "./smolvlm_turtlebot_action_balanced"
+ft_dir = "./smolvlm_turtlebot_action_ft"
 print(f"Loading fine-tuned model from: {ft_dir}")
 
 # Load processor
@@ -54,7 +54,7 @@ for file in os.listdir(dir):
     inputs = processor(images=[img], text=[prompt], return_tensors="pt").to(DEVICE)
 
     with torch.inference_mode():
-        outputs = model.generate(**inputs, max_new_tokens=15)
+        outputs = model.generate(**inputs, max_new_tokens=15, temperature=0.8, top_p=0.9)
 
     result = processor.batch_decode(outputs, skip_special_tokens=True)[0]
     if "Assistant:" in result:

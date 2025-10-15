@@ -1,3 +1,5 @@
+import random
+
 from peft import PeftModel, PeftConfig
 from transformers import AutoProcessor, Idefics3ForConditionalGeneration
 import torch
@@ -30,7 +32,9 @@ print("✅ Model and LoRA adapter loaded.\n")
 
 print("Running quick inference test...")
 dir = "captured_frames/captured_frames"
-for file in os.listdir(dir):
+files = os.listdir(dir)
+random.shuffle(files)
+for file in files:
     if not file.endswith('.jpg'):
         continue
     test_img = os.path.join(dir, file)#"frame_000016_20250604_144135_525.jpg"  # or train_ds[0]["image"]

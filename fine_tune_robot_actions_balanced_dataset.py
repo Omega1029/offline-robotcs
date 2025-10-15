@@ -13,8 +13,8 @@ from transformers import (
 )
 from peft import LoraConfig, get_peft_model
 
-EPOCHS = 10
-TARGET_COUNT = 2990  # Match the 'right' class size
+EPOCHS = 1
+#TARGET_COUNT = 2990  # Match the 'right' class size
 
 
 # ================================================================

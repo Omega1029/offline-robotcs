@@ -48,8 +48,8 @@ for file in files:
             "role": "user",
             "content": [
                 {"type": "image"},
-                {"type": "text",
-                 "text": "Frame captured by TurtleBot. Respond with only the exact robot_action value, e.g., forward_0.2_3.0s."}
+                #{"type": "text",
+                 #"text": "Frame captured by TurtleBot. Respond with only the exact robot_action value, e.g., forward_0.2_3.0s."}
             ],
         },
     ]

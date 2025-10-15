@@ -16,7 +16,7 @@ print(f"Loading fine-tuned model from: {ft_dir}")
 
 # Load processor
 processor = AutoProcessor.from_pretrained(ft_dir)
-seen = set()
+seen = list()
 # Load base model
 base_model_id = "HuggingFaceTB/SmolVLM-Base"
 model = Idefics3ForConditionalGeneration.from_pretrained(
@@ -64,9 +64,9 @@ for file in files:
     if "Assistant:" in result:
         result = result.split("Assistant:")[-1].strip()
 
-    if result in seen:
+    if seen and result == seen[-1]:
         continue
 
-    seen.add(result)
+    seen.append(result)
     print("Predicted:", result)
     print("From image:", os.path.basename(test_img))

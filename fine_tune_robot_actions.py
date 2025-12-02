@@ -196,7 +196,6 @@ print("Setting up trainer...")
 training_args = TrainingArguments(
     num_train_epochs=10,               # 🔥 more epochs — memorize the tiny dataset
     per_device_train_batch_size=1,
-<<<<<<< HEAD:programs/fine_tune_robot_actions.py
     gradient_accumulation_steps=4,
     learning_rate=5e-5,
     logging_steps=10,
@@ -205,16 +204,6 @@ training_args = TrainingArguments(
     bf16=False,
     fp16=False,
     output_dir="./smolvlm_turtlebot_action",
-=======
-    gradient_accumulation_steps=1,     # no accumulation — update each step
-    learning_rate=5e-4,                # higher LR = faster memorization
-    warmup_steps=0,
-    weight_decay=0.0,                  # no regularization
-    logging_steps=1,                   # log every step
-    save_strategy="no",                # skip checkpoint overhead
-    fp16=torch.cuda.is_available(),
-    output_dir="./smolvlm_turtlebot_action_overfit",
->>>>>>> 8fd35f6b30c04de2f9a957101a53570c16431795:fine_tune_robot_actions.py
     report_to="none",
     remove_unused_columns=False,
     gradient_checkpointing=False,

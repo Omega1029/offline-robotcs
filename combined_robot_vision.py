@@ -27,7 +27,8 @@ os.makedirs(capture_dir, exist_ok=True)
 class CombinedRobotVision(Node):
     def __init__(self):
         super().__init__('combined_robot_vision')
-        
+
+        self.is_performing_sequence = False
         # ROS2 publishers and subscribers
         self.publisher = self.create_publisher(Twist, '/cmd_vel', 10)
         self.subscription = self.create_subscription(
@@ -36,30 +37,30 @@ class CombinedRobotVision(Node):
             self.listener_callback,
             10)
         
-        # Initialize robot action parameters BEFORE starting threads
-        self.action_sequence = [
-            ("forward", 0.2, 3.0),    # (command, speed, duration)
-            ("stop", 0.0, 1.0),
-            ("left", 0.5, 2.0),
-            ("stop", 0.0, 1.0),
-            ("right", 0.5, 2.0),
-            ("stop", 0.0, 1.0),
-            ("backward", 0.2, 3.0),
-            ("stop", 0.0, 1.0),
-        ]
-        self.current_action_index = 0
-        self.action_start_time = None
-        self.is_performing_sequence = False
-        
         self.get_logger().info("CombinedRobotVision node started!")
         self.get_logger().info(f"Camera feed available at: http://localhost:8081")
         self.get_logger().info(f"Command server listening on port 5000")
         self.get_logger().info(f"Images being saved to: {capture_dir}")
         
-        # Start background threads AFTER initializing attributes
+        # Start background threads
         self.start_camera_server()
         self.start_command_server()
         self.start_robot_action_thread()
+        
+        # Initialize robot action parameters
+        self.action_sequence = [
+            ("forward", 0.2, 3.0),    # (command, speed, duration)
+            ("stop", 0.0, 1.0),
+            ("left", 0.5, 2.0),
+            ("stop", 0.0, 1.0),
+            ("right", 0.5, 4.0),
+            ("stop", 0.0, 1.0),
+            ("left", 0.5, 2.0),
+            #("backward", 0.2, 3.0),
+            ("stop", 0.0, 1.0),
+        ]
+        self.current_action_index = 0
+        self.action_start_time = None
 
     def listener_callback(self, msg):
         """Handle incoming camera frames"""
@@ -218,6 +219,7 @@ class CombinedRobotVision(Node):
         """Start thread for automated robot actions"""
         action_thread = threading.Thread(target=self.robot_action_loop, daemon=True)
         action_thread.start()
+        self.is_performing_sequence = True
 
     def robot_action_loop(self):
         """Main loop for automated robot actions"""
@@ -225,6 +227,51 @@ class CombinedRobotVision(Node):
             if self.is_performing_sequence:
                 self.execute_action_sequence()
             time.sleep(0.1)  # 10 Hz update rate
+
+    def move_rotate_move(self, distance1: float, angle_deg: float, distance2: float):
+        """
+        Moves forward by distance1 (meters), rotates by angle_deg (degrees),
+        then moves forward by distance2 (meters).
+        """
+        linear_speed = 0.2      # m/s
+        angular_speed = 0.5     # rad/s
+
+        # Convert degrees to radians
+        angle_rad = angle_deg * (3.14159265 / 180.0)
+
+        # Durations
+        duration1 = abs(distance1 / linear_speed)
+        duration2 = abs(angle_rad / angular_speed)
+        duration3 = abs(distance2 / linear_speed)
+
+        # Determine direction
+        linear_sign1 = 1.0 if distance1 >= 0 else -1.0
+        angular_sign = 1.0 if angle_rad >= 0 else -1.0
+        linear_sign2 = 1.0 if distance2 >= 0 else -1.0
+
+        self.get_logger().info(f"Moving {distance1}m, rotating {angle_deg}°, then moving {distance2}m")
+
+        # Move forward
+        self.move_for_duration(linear=linear_speed * linear_sign1, angular=0.0, duration=duration1)
+        # Rotate
+        self.move_for_duration(linear=0.0, angular=angular_speed * angular_sign, duration=duration2)
+        # Move forward again
+        self.move_for_duration(linear=linear_speed * linear_sign2, angular=0.0, duration=duration3)
+
+    def move_for_duration(self, linear: float, angular: float, duration: float):
+        """Publishes a twist command for a specific duration (in seconds)."""
+        msg = Twist()
+        msg.linear.x = linear
+        msg.angular.z = angular
+
+        end_time = time.time() + duration
+        while time.time() < end_time:
+            self.publisher.publish(msg)
+            time.sleep(0.1)  # 10 Hz
+
+        # Stop after movement
+        stop_msg = Twist()
+        self.publisher.publish(stop_msg)
 
     def execute_action_sequence(self):
         """Execute the current action in the sequence"""
@@ -279,51 +326,6 @@ class CombinedRobotVision(Node):
         msg = Twist()
         self.publisher.publish(msg)
 
-    def move_rotate_move(self, distance1: float, angle_deg: float, distance2: float):
-        """
-        Moves forward by distance1 (meters), rotates by angle_deg (degrees),
-        then moves forward by distance2 (meters).
-        """
-        linear_speed = 0.2      # m/s
-        angular_speed = 0.5     # rad/s
-
-        # Convert degrees to radians
-        angle_rad = angle_deg * (3.14159265 / 180.0)
-
-        # Durations
-        duration1 = abs(distance1 / linear_speed)
-        duration2 = abs(angle_rad / angular_speed)
-        duration3 = abs(distance2 / linear_speed)
-
-        # Determine direction
-        linear_sign1 = 1.0 if distance1 >= 0 else -1.0
-        angular_sign = 1.0 if angle_rad >= 0 else -1.0
-        linear_sign2 = 1.0 if distance2 >= 0 else -1.0
-
-        self.get_logger().info(f"Moving {distance1}m, rotating {angle_deg}°, then moving {distance2}m")
-
-        # Move forward
-        self.move_for_duration(linear=linear_speed * linear_sign1, angular=0.0, duration=duration1)
-        # Rotate
-        self.move_for_duration(linear=0.0, angular=angular_speed * angular_sign, duration=duration2)
-        # Move forward again
-        self.move_for_duration(linear=linear_speed * linear_sign2, angular=0.0, duration=duration3)
-
-    def move_for_duration(self, linear: float, angular: float, duration: float):
-        """Publishes a twist command for a specific duration (in seconds)."""
-        msg = Twist()
-        msg.linear.x = linear
-        msg.angular.z = angular
-
-        end_time = time.time() + duration
-        while time.time() < end_time:
-            self.publisher.publish(msg)
-            time.sleep(0.1)  # 10 Hz
-
-        # Stop after movement
-        stop_msg = Twist()
-        self.publisher.publish(stop_msg)
-
 class MJPEGHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -360,8 +362,5 @@ def main(args=None):
         node.destroy_node()
         rclpy.shutdown()
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
-
-
-

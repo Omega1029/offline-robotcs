@@ -1,0 +1,4 @@
+{
+  "image_seq_len": 81,
+  "processor_class": "Idefics3Processor"
+}

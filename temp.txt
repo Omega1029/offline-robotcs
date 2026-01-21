@@ -1,0 +1,9 @@
+main: loading model: smol_vlm_balanced.gguf
+encoding image slice...
+image slice encoded in 2322 ms
+decoding image batch 1/1, n_tokens_batch = 81
+image decoded (batch 1/1) in 1 ms
+
+forward_0.2_3.0s
+
+

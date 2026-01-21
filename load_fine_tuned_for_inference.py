@@ -54,6 +54,6 @@ with torch.inference_mode():
     outputs = model.generate(**inputs, max_new_tokens=15)
 
 result = processor.batch_decode(outputs, skip_special_tokens=True)[0]
-print("Predicted:", result)
+print("Predicted:", result['Assistant'])
 
 print("From image:", os.path.basename(test_img))

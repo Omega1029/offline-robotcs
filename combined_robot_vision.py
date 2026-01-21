@@ -12,6 +12,7 @@ import os
 import time
 from datetime import datetime
 import json
+from client_action_zmq import GGUFActionClient
 
 # Global variables for shared state
 bridge = CvBridge()
@@ -45,7 +46,9 @@ class CombinedRobotVision(Node):
         # Start background threads
         self.start_camera_server()
         self.start_command_server()
-        self.start_robot_action_thread()
+        #self.start_robot_action_thread()
+
+        action_client = GGUFActionClient(server_ip="192.168.1.100", port=5555)
         
         # Initialize robot action parameters
         self.action_sequence = [
@@ -115,35 +118,66 @@ class CombinedRobotVision(Node):
         server_thread.start()
 
     def run_command_server(self, host='0.0.0.0', port=5000):
-        """Run the TCP command server"""
+        """Run a persistent TCP command server."""
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind((host, port))
-        sock.listen(5)
+        sock.listen(1)
         self.get_logger().info(f"Command server listening on {host}:{port}")
 
         while True:
             try:
                 conn, addr = sock.accept()
-                self.get_logger().info(f"Command connection from {addr}")
-                threading.Thread(target=self.handle_client, args=(conn,), daemon=True).start()
+                self.get_logger().info(f"Command connection established from {addr}")
+                self.handle_client(conn)  # persistent connection
             except Exception as e:
                 self.get_logger().error(f"Command server error: {e}")
+                time.sleep(1)
 
     def handle_client(self, conn):
-        """Handle individual client connections"""
+        """Handle persistent connection from controller."""
         with conn:
             while True:
                 try:
                     data = conn.recv(1024)
                     if not data:
+                        self.get_logger().warn("Client disconnected.")
                         break
+
                     command = data.decode('utf-8').strip().lower()
                     self.get_logger().info(f"Received command: {command}")
-                    self.handle_command(command)
+
+                    # If command is 'command', run inference
+                    if command == "command":
+                        self.connect_and_act()
+                    else:
+                        # Normal robot command
+                        self.handle_command(command)
+
+                except ConnectionResetError:
+                    self.get_logger().warn("Client disconnected abruptly.")
+                    break
                 except Exception as e:
                     self.get_logger().error(f"Error handling client: {e}")
                     break
+
+    def connect_and_act(self):
+        """Send frame to inference server and execute predicted action."""
+        try:
+            if latest_frame is None:
+                self.get_logger().warn("No frame available yet.")
+                return
+
+            frame = latest_frame.copy()
+            action = self.action_client.send_frame(frame)
+
+            if action:
+                self.get_logger().info(f"Received AI action: {action}")
+                self.handle_command(action)
+            else:
+                self.get_logger().warn("No valid action received from server.")
+        except Exception as e:
+            self.get_logger().error(f"Error during connect_and_act: {e}")
 
     def handle_command(self, command: str):
         """Handle movement commands"""

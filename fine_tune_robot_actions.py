@@ -4,12 +4,16 @@ Goal: Image → robot_action text (no question)
 Compatible with macOS (CPU or Apple Silicon)
 """
 
+import torch, gc
+gc.collect()
+torch.cuda.empty_cache()
+
 import os, json, glob, re, torch
 from PIL import Image
 from datasets import Dataset
 from transformers import (
     AutoProcessor, Idefics3ForConditionalGeneration,
-    TrainingArguments, Trainer
+    TrainingArguments, Trainer, BitsAndBytesConfig
 )
 from peft import LoraConfig, get_peft_model
 
@@ -85,16 +89,30 @@ DEVICE = "mps" if torch.backends.mps.is_available() else (
 print(f"Using device: {DEVICE}")
 
 processor = AutoProcessor.from_pretrained(MODEL_ID)
+
 model = Idefics3ForConditionalGeneration.from_pretrained(
     MODEL_ID,
     torch_dtype=torch.float16 if DEVICE != "cpu" else torch.float32
 ).to(DEVICE)
+"""
+bnb_config = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_use_double_quant=True,
+    bnb_4bit_quant_type="nf4",
+    bnb_4bit_compute_dtype=torch.float16,
+)
 
+model = Idefics3ForConditionalGeneration.from_pretrained(
+    MODEL_ID,
+    quantization_config=bnb_config,
+    device_map="auto"
+)
+"""
 # Simple LoRA configuration (no bitsandbytes)
 lora_config = LoraConfig(
-    r=8,
-    lora_alpha=8,
-    lora_dropout=0.1,
+    r=4,
+    lora_alpha=4,
+    lora_dropout=0.05,
     target_modules=['down_proj','o_proj','k_proj','q_proj','gate_proj','up_proj','v_proj'],
     init_lora_weights="gaussian"
 )
@@ -178,14 +196,14 @@ print("Setting up trainer...")
 training_args = TrainingArguments(
     num_train_epochs=10,               # 🔥 more epochs — memorize the tiny dataset
     per_device_train_batch_size=1,
-    gradient_accumulation_steps=1,     # no accumulation — update each step
-    learning_rate=5e-4,                # higher LR = faster memorization
-    warmup_steps=0,
-    weight_decay=0.0,                  # no regularization
-    logging_steps=1,                   # log every step
-    save_strategy="no",                # skip checkpoint overhead
-    fp16=torch.cuda.is_available(),
-    output_dir="./smolvlm_turtlebot_action_overfit",
+    gradient_accumulation_steps=4,
+    learning_rate=5e-5,
+    logging_steps=10,
+    save_strategy="epoch",
+    optim="adamw_torch_fused",
+    bf16=False,
+    fp16=False,
+    output_dir="./smolvlm_turtlebot_action",
     report_to="none",
     remove_unused_columns=False,
     gradient_checkpointing=False,

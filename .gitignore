@@ -9,3 +9,5 @@ llama.cpp/
 *.gguf
 smolvlm*
 #_merged_for_gguf/
+venv
+

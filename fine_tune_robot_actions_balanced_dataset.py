@@ -79,6 +79,8 @@ for img_path, meta_path in zip(img_files, json_files):
 
         # Extract action keyword (e.g., "forward" from "forward_0.2_3.0s")
         action_type = caption.split("_")[0].lower().strip()
+        if action_type == "stop":
+            continue
         actions_dict[action_type].append({"image": img_path, "caption": caption.strip()})
     except Exception as e:
         print(f"Skipping pair due to JSON error ({os.path.basename(meta_path)}): {e}")

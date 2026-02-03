@@ -3,7 +3,7 @@ from PIL import Image
 
 LLAMA_CMD = [
     "llama-mtmd-cli",
-    "-m", "smol_vlm_balanced_iq4_xs.gguf",
+    "-m", "smol_vlm_balanced.gguf",
     "--mmproj", "mmproj-smol_vlm_balanced.gguf",
     "--chat-template", "deepseek"
 ]

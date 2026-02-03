@@ -5,7 +5,7 @@ import io
 import cv2
 import numpy as np
 from PIL import Image
-from persistent_gguf_infer import get_persistent_model  # <-- import your class file
+from load_model_and_get_action import get_persistent_model  # <-- import your class file
 import time
 
 # ================================================================

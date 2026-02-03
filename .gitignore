@@ -11,3 +11,4 @@ smolvlm*
 #_merged_for_gguf/
 venv
 
+.ipynb_checkpoints/

@@ -1,5 +1,29 @@
-git clone https://github.com/ggml-org/llama.cpp
-cd llama.cpp
+1. Run fine_tune_robot_actions_balanced_dataset.py
+2a. After Fine tuning Model smolvlm_turtlebot_action_balanced
+2b. Copy to Jetson Nano (Or Other Edge hardware)
+3. In "merge_lora...gemini" Change the name of the MODEL DIR to the {Whatever You choose}
+4. Run merge_lora_...gemini.py
+5. navigate to Llama.cpp directory
+5a. Run either of these "python convert_hf_to_gguf.py ../smolvlm-merged-model --outfile ../smolvlm-finetuned.gguf"
+5b. python convert_hf_to_gguf.py \
+    ../smolvlm-merged-model \
+    --outfile smolvlm-finetuned-f16.gguf \
+    --outtype f16
 
-cmake --build build --config Release -j 8
-llama-mtmd-cli -hf ggml-org/SmolVLM-256M-Instruct-GGUF
+5c. Note: This file is 3.62G
+6. THIS IS VERY IMPORTANT. Run the same commands to create the mmproj file. Copy what is below.
+6a. "python convert_hf_to_gguf.py \
+    ./smolvlm-merged-model \
+    --outfile mmproj-smolvlm-f16.gguf \
+    --outtype f16 \
+    --mmproj"
+
+6b.This file is 872M
+7. Quantize the model
+7a. llama-quantize smolvlm-finetuned-f16.gguf smolvlm-finetuned-Q4_K_M.gguf Q4_K_M
+7b. Stats
+llama_model_quantize_impl: model size  =  3456.41 MiB
+llama_model_quantize_impl: quant size  =  1059.02 MiB
+
+main: quantize time = 63046.07 ms
+main:    total time = 63046.07 ms

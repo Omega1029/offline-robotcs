@@ -24,7 +24,7 @@ except Exception:
 # -----------------------
 # Hyperparams
 # -----------------------
-EPOCHS = 1  # keep as requested; consider 3–5 after you verify balance works
+EPOCHS = 5  # keep as requested; consider 3–5 after you verify balance works
 SEED = 42
 
 # -----------------------

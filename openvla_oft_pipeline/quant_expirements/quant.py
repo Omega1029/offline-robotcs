@@ -45,6 +45,29 @@ def backbone_linears(model):
                 yield full, module, attr, child
 
 
+def _module_linears(root, prefix):
+    """Yield (full_name, parent_module, attr, nn.Linear) for every nn.Linear under `root`."""
+    if root is None:
+        return
+    for mod_name, module in root.named_modules():
+        for attr, child in list(module.__dict__.get("_modules", {}).items()):
+            if isinstance(child, nn.Linear):
+                full = f"{prefix}.{mod_name}.{attr}".replace("..", ".")
+                yield full, module, attr, child
+
+
+def vision_linears(model):
+    """Yield quantizable nn.Linear in the fused vision tower (DINOv2 + SigLIP featurizers).
+    These are the ViT attention qkv/proj and MLP fc1/fc2 layers."""
+    yield from _module_linears(getattr(model, "vision_backbone", None), "vision_backbone")
+
+
+def action_head_linears(model):
+    """Yield nn.Linear in the L1RegressionActionHead (MLPResNet: fc1, block ffns, fc2).
+    The most action-sensitive component — quantize with care (channel-wise)."""
+    yield from _module_linears(getattr(model, "action_head", None), "action_head")
+
+
 # ════════════════════════════════ FakeQuant ══════════════════════════════════
 class FakeQuant:
     """Core primitives (static) + the universal quantized-Linear wrapper + a uniform
@@ -73,6 +96,21 @@ class FakeQuant:
             s = wr.abs().amax(dim=1, keepdim=True).clamp_min(1e-8) / qmax if scale is None else scale[rows]
             out[rows] = torch.round(wr / s).clamp(-qmax - 1, qmax) * s
         return out
+
+    @staticmethod
+    def quant_weight_fp8(W: torch.Tensor, fmt: str = "e4m3", per_channel: bool = True):
+        """Fake FP8 weight quant using torch's real FP8 dtypes (true E4M3/E5M2 rounding),
+        with a per-output-channel (or per-tensor) scale into the FP8 dynamic range."""
+        W = W.float()
+        if fmt == "e4m3":
+            dt, fmax = torch.float8_e4m3fn, 448.0
+        else:  # e5m2
+            dt, fmax = torch.float8_e5m2, 57344.0
+        if per_channel:
+            s = W.abs().amax(dim=1, keepdim=True).clamp_min(1e-8) / fmax
+        else:
+            s = W.abs().max().clamp_min(1e-8) / fmax
+        return (W / s).clamp(-fmax, fmax).to(dt).float() * s
 
     @staticmethod
     def quant_act(x: torch.Tensor, bits: int, scale: torch.Tensor | float | None = None,
@@ -147,6 +185,70 @@ class FakeQuant:
         print(f"[FakeQuant] grafted {n} backbone linears @ W{self.w_bits}"
               f"{'A'+str(self.a_bits) if self.a_bits else ''} ({self.a_mode})")
         return model
+
+
+# ═══════════════════════════════ ComponentQuant ══════════════════════════════
+class ComponentQuant:
+    """Phase-1 component-wise quantization: independently set precision for the vision
+    tower, the Llama backbone, and the action head, then graft FakeQuant.Linear into each.
+
+    Spec per component is one of:
+        None          -> leave bf16 (untouched)
+        int <bits>    -> symmetric per-output-channel weight quant at <bits>
+        "fp8" / "fp8_e5m2" -> real FP8 (E4M3 / E5M2) weight quant
+    `backbone_a_bits` optionally adds activation quant on the backbone (e.g. W4A4).
+    The backbone may also be handed off to an external technique via `backbone_tech`
+    (e.g. a DCT-rotation Transform), in which case its bits/a_bits here are ignored.
+    """
+    name = "component"
+
+    def __init__(self, vision=None, backbone=None, head=None,
+                 backbone_a_bits=None, head_mode="per_channel", backbone_tech=None):
+        self.vision = vision
+        self.backbone = backbone
+        self.head = head
+        self.backbone_a_bits = backbone_a_bits
+        self.head_mode = head_mode
+        self.backbone_tech = backbone_tech
+
+    @staticmethod
+    def _graft(enum, spec, device, a_bits=None):
+        """Graft FakeQuant.Linear into every linear yielded by `enum` per `spec`."""
+        if spec is None:
+            return 0
+        n = 0
+        for full, parent, attr, lin in list(enum):
+            if isinstance(spec, str) and spec.startswith("fp8"):
+                fmt = "e5m2" if "e5m2" in spec else "e4m3"
+                wdq = FakeQuant.quant_weight_fp8(lin.weight.data, fmt=fmt)
+                ql = FakeQuant.Linear(lin, weight_dq=wdq, a_bits=a_bits)
+            else:  # integer bits
+                ql = FakeQuant.Linear(lin, w_bits=int(spec), a_bits=a_bits)
+            setattr(parent, attr, ql.to(device))
+            n += 1
+        return n
+
+    def apply(self, model, ctx=None):
+        dev = next(model.parameters()).device
+        # Backbone: either an external technique (e.g. DCT rotation) or plain int/fp8.
+        if self.backbone_tech is not None:
+            import inspect
+            p = inspect.signature(self.backbone_tech.apply).parameters
+            (self.backbone_tech.apply(model, ctx) if len(p) >= 2
+             else self.backbone_tech.apply(model))
+            nb = "<tech>"
+        else:
+            nb = self._graft(backbone_linears(model), self.backbone, dev,
+                             a_bits=self.backbone_a_bits)
+        nv = self._graft(vision_linears(model), self.vision, dev)
+        nh = self._graft(action_head_linears(model), self.head, dev)
+        print(f"[ComponentQuant] vision={self.vision}({nv})  "
+              f"backbone={self.backbone if self.backbone_tech is None else 'tech'}({nb})  "
+              f"head={self.head}({nh})")
+        # effective backbone bits for size accounting
+        if self.backbone_tech is not None:
+            return float(getattr(self.backbone_tech, "w_bits", 4) or 4)
+        return float(self.backbone or 16)
 
 
 # ═══════════════════════════════════ QVLA ════════════════════════════════════

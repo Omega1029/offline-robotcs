@@ -1,0 +1,1 @@
+{"mode": "bf16", "device": "Orin", "weights_GB": 15.43, "peak_GB": 15.81, "latency_ms_median": 320.16, "latency_ms_mean": 320.19, "latency_ms_p90": 320.7, "throughput_qps": 3.1, "load_s": 28.6, "iters": 30}

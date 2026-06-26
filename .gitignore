@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.eggs/
+
+# Virtual environment
+venv/
+env/
+.env
+
+# Large model artifacts (not tracked — too large for git)
+quant_bench/checkpoints/
+quant_bench/*.gguf
+quant_bench/hf_cache/
+quant_bench/_gguf_staging/
+*.gguf
+*.safetensors
+*.bin
+*.pt
+
+# llama.cpp (external repo — rebuild from source)
+llama.cpp/
+
+# openvla-oft (external repo — install via pip)
+openvla-oft/
+quant_bench/openvla-oft/
+
+# LIBERO datasets and data splits
+LIBERO/
+libero_subset/
+satellite/
+libero_subset_15demos.tar.gz
+
+# Temp images and frames
+*.jpg
+*.jpeg
+*.png
+tmp_frame*
+captured_frames/
+latest
+
+# Misc
+.ipynb_checkpoints/
+*.log
+temp.txt
+help.txt
+zero_to_fp32.py

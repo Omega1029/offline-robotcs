@@ -1,0 +1,8 @@
+{
+  "checkpoint": "quant_bench/checkpoints/openvla_oft_libero/epoch_003/hf_model",
+  "rollouts_per_task": 10,
+  "suite_success_rates": {
+    "libero_spatial": 0.83
+  },
+  "average_success_rate": 0.83
+}

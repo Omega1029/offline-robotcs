@@ -57,6 +57,8 @@ def build_configs():
     def dct(w=4, a=4):
         return qa.Transform(kind="dct", w_bits=w, a_bits=a)
     cfgs = {}
+    # ── true bf16 baseline (no-op graft) — for honest per-suite retention ──
+    cfgs["bf16_baseline"] = quant.ComponentQuant()
     # ── Phase 1a: component sensitivity (isolate one, others bf16) ──
     cfgs["head_int8"]       = quant.ComponentQuant(head=8)
     cfgs["head_int4"]       = quant.ComponentQuant(head=4)

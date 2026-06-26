@@ -116,9 +116,20 @@ Treats OFT as three independently-quantizable components. Mono-cam epoch_003, fa
 | FP8 + DCT-W4A4 + INT8 (`combo_vfp8_b4dct_h8`) | 82.0% | 4.79 GB | 69%↓ | 95.3% |
 
 **Deployment pick = `combo_v8_b4dct_h8`** (vision INT8 + backbone DCT-W4A4 + head INT8):
-**69% smaller at 95.3% retention** on full spatial. The action head must stay ≥INT8 (INT4 → 70%),
-which — with the bf16-frozen embeddings/lm_head — caps the reduction at ~69%. *(In progress:
-all-4-suite 10×10 for the paper-grade number; DCT-W3A8 backbone variants probing past 70%.)*
+**69% smaller at 95.3% retention** on full spatial.
+
+**Phase 1c — pushing past 70% (full eval, spatial 10×10):**
+
+| config | success | size | reduction | retention | clears >70%↓ & >95%? |
+|---|---|---|---|---|---|
+| `combo_v8_b3a8dct_h8` (vision INT8 + **DCT-W3A8** + head INT8) | 84.0% | 3.98 GB | **74%↓** | **97.7%** | ✅ **YES** |
+
+**`combo_v8_b3a8dct_h8` clears the success threshold: 74% smaller at 97.7% retention.** Counter-
+intuitively it *beats* the W4A4 backbone (84% vs 82%) — because **8-bit activations ≫ 4-bit
+activations**, and dropping weights W4→W3 costs less than the A4→A8 activation gain. This is the
+"activations are the wall, not weights" thesis paying off twice: W3**A8** > W4**A4** at *smaller*
+size. *(In progress: the two remaining W3 variants — W3A4, FP8-vision-W3A8 — and the paper-grade
+all-4-suite 10×10 for the winner.)*
 
 ## 5. Mapping to the goal (one of: same size/speed+better; smaller+same; smaller+10–15% worse)
 

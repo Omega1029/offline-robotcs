@@ -123,13 +123,16 @@ Treats OFT as three independently-quantizable components. Mono-cam epoch_003, fa
 | config | success | size | reduction | retention | clears >70%↓ & >95%? |
 |---|---|---|---|---|---|
 | `combo_v8_b3a8dct_h8` (vision INT8 + **DCT-W3A8** + head INT8) | 84.0% | 3.98 GB | **74%↓** | **97.7%** | ✅ **YES** |
+| `combo_v8_b3a4dct_h8` (vision INT8 + DCT-W3**A4** + head INT8) | 83.0% | 3.98 GB | 74%↓ | 96.5% | ✅ YES |
+| `combo_vfp8_b3a8dct_h8` (vision **FP8** + DCT-W3A8 + head INT8) | 83.0% | 3.98 GB | 74%↓ | 96.5% | ✅ YES |
 
-**`combo_v8_b3a8dct_h8` clears the success threshold: 74% smaller at 97.7% retention.** Counter-
-intuitively it *beats* the W4A4 backbone (84% vs 82%) — because **8-bit activations ≫ 4-bit
-activations**, and dropping weights W4→W3 costs less than the A4→A8 activation gain. This is the
-"activations are the wall, not weights" thesis paying off twice: W3**A8** > W4**A4** at *smaller*
-size. *(In progress: the two remaining W3 variants — W3A4, FP8-vision-W3A8 — and the paper-grade
-all-4-suite 10×10 for the winner.)*
+**The entire W3-backbone family clears the threshold: 74% smaller at 96.5–97.7% retention.** It
+*beats* the W4A4 backbone on size, and A8 vs A4 (84% vs 83%) is **within the ±8% CI** at 100
+rollouts — because the DCT rotation already conditions the activations, so once rotated, 4-bit vs
+8-bit activations barely differ. The thesis holds twice over: low-bit activations are only the wall
+*without* rotation (naive A4 = 0%); *with* DCT, even W3A4 holds 96.5%, so weights can go to 3 bits
+essentially for free. **Robust frontier, not a single lucky point.** *(In progress: paper-grade
+all-4-suite 10×10 for `b3a8` and `b4dct`.)*
 
 ## 5. Mapping to the goal (one of: same size/speed+better; smaller+same; smaller+10–15% worse)
 

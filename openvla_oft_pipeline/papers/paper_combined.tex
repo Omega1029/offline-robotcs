@@ -292,6 +292,33 @@ $11{,}008$-dim \texttt{down\_proj} layers), DCT applies the \emph{true} transfor
 backbone linears, is data-free and $O(n\log n)$, and is full-eval-confirmed at $89.8\%$
 ($99.5\%$ retention).
 
+\subsection{Component-wise allocation: vision is free, the head is the floor}\label{sec:component}
+Treating the policy as three quantizable components (fused vision tower, Llama backbone,
+L1-regression head) reveals a clean sensitivity ordering (full eval, \textsc{spatial}, $10{\times}10$;
+retention vs.\ bf16 $86.0\%$). The vision tower is \emph{free}: INT8 and FP8 (E4M3) are both
+lossless. The action head is the \emph{floor}: INT8 is safe but INT4 collapses success to $70\%$
+and INT3 to $50\%$---a handful of action-token deviations is catastrophic, so the head must stay
+$\ge$INT8. Composing the safe choices (vision INT8 $+$ backbone DCT-W4A4 $+$ head INT8) gives the
+deployment operating point in Table~\ref{tab:component}: $69\%$ smaller at $95.3\%$ retention.
+Because the head must stay INT8 and the embeddings/lm\_head remain bf16, $\sim$69\% is the
+architectural reduction ceiling at this accuracy.
+
+\begin{table}[h]\centering\small
+\caption{Component-wise Pareto frontier (full eval, \textsc{spatial} $10{\times}10$; retention vs.\
+bf16 $86.0\%$). Vision/backbone/head precision; size is the estimated static footprint.}
+\label{tab:component}
+\begin{tabular}{lccc}
+\toprule
+Vision\,/\,Backbone\,/\,Head & Success & Size & Retention \\
+\midrule
+bf16 / bf16 / bf16 & $86.0\%$ & $15.4$\,GB & $100\%$ \\
+INT8 / INT8 / INT8 & $85.0\%$ & $8.0$\,GB & $98.8\%$ \\
+bf16 / DCT-W4A4 / bf16 & $84.0\%$ & $5.7$\,GB & $97.7\%$ \\
+\textbf{INT8 / DCT-W4A4 / INT8} & $82.0\%$ & $\mathbf{4.8}$\,\textbf{GB} & $\mathbf{95.3\%}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
 \subsection{The reachable bit-width frontier}\label{sec:reach}
 Three regimes appear cleanly (Table~\ref{tab:reach}). Notably, rotation plus near-lossless
 8-bit activations (W2A8) still yields $0\%$: the 2-bit wall is a \emph{weight} representational

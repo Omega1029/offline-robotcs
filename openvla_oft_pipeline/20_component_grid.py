@@ -74,6 +74,10 @@ def build_configs():
     cfgs["combo_vfp8_b4dct_h8"]  = quant.ComponentQuant(vision="fp8", head=8, backbone_tech=dct(4, 4))
     cfgs["combo_v8_b4dct_h4"]    = quant.ComponentQuant(vision=8, head=4, backbone_tech=dct(4, 4))
     cfgs["combo_aggressive"]     = quant.ComponentQuant(vision="fp8", head=4, backbone_tech=dct(4, 4))
+    # ── Phase 1c: push past 70% size — shrink the backbone (head stays INT8) ──
+    cfgs["combo_v8_b3a8dct_h8"]  = quant.ComponentQuant(vision=8, head=8, backbone_tech=dct(3, 8))
+    cfgs["combo_v8_b3a4dct_h8"]  = quant.ComponentQuant(vision=8, head=8, backbone_tech=dct(3, 4))
+    cfgs["combo_vfp8_b3a8dct_h8"]= quant.ComponentQuant(vision="fp8", head=8, backbone_tech=dct(3, 8))
     return cfgs
 
 

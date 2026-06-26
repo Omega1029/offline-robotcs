@@ -91,6 +91,35 @@ Global orthogonal mixing delivers it; permutation (no mixing), Haar (localized),
 Givens (partial), PCA (concentrates energy — opposite), and ZCA (non-orthogonal) all violate it.
 **Deployment pick = DCT** — ties Hadamard, works on any dimension (no pow2 fallback), fast to build.
 
+## 4c. Component-wise grid (`20_component_grid.py`) — vision / backbone / head
+
+Treats OFT as three independently-quantizable components. Mono-cam epoch_003, fake-quant.
+**Component sensitivity** (libero_spatial, 4 tasks × 5 rollouts screen — isolate one, others bf16):
+
+| component | precision | success | takeaway |
+|---|---|---|---|
+| action head | INT8 | 100% | safe |
+| action head | INT4 | **70%** | cliff — head is the fragile component |
+| action head | INT3 | 50% | catastrophic |
+| vision tower | INT8 / FP8-E4M3 | 100% / 100% | free |
+| vision tower | FP8-E5M2 | 95% | slightly worse (fewer mantissa bits) |
+| backbone | DCT-W4A4 | 100% | the main win |
+
+**Pareto frontier — FULL EVAL (libero_spatial, 10 tasks × 10 rollouts), real retention vs bf16 = 86.0%:**
+
+| config (vision + backbone + head) | success | size | reduction | retention |
+|---|---|---|---|---|
+| bf16 baseline | 86.0% | 15.39 GB | — | 100% |
+| INT8 + INT8 + INT8 (`combo_full_int8`) | 85.0% | 8.03 GB | 48%↓ | **98.8%** |
+| bf16 + DCT-W4A4 + bf16 (`backbone_w4a4_dct`) | 84.0% | 5.67 GB | 63%↓ | **97.7%** |
+| INT8 + DCT-W4A4 + INT8 (`combo_v8_b4dct_h8`) | 82.0% | 4.79 GB | **69%↓** | **95.3%** |
+| FP8 + DCT-W4A4 + INT8 (`combo_vfp8_b4dct_h8`) | 82.0% | 4.79 GB | 69%↓ | 95.3% |
+
+**Deployment pick = `combo_v8_b4dct_h8`** (vision INT8 + backbone DCT-W4A4 + head INT8):
+**69% smaller at 95.3% retention** on full spatial. The action head must stay ≥INT8 (INT4 → 70%),
+which — with the bf16-frozen embeddings/lm_head — caps the reduction at ~69%. *(In progress:
+all-4-suite 10×10 for the paper-grade number; DCT-W3A8 backbone variants probing past 70%.)*
+
 ## 5. Mapping to the goal (one of: same size/speed+better; smaller+same; smaller+10–15% worse)
 
 - `rot_w4a4_had` and `rot_w3a8_had` → **smaller size *and* speed, same success** (within ~1.5 pts).

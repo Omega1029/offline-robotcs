@@ -257,6 +257,15 @@ Orin's public key installed in `~/.ssh/authorized_keys` on A100. Reverse connect
 - [ ] Orin latency/memory with real INT4 kernels (not just GGUF)
 - [ ] Orin 60% vs A100 88% gap explained or controlled for
 
+### Competitive positioning (see `COMPETITIVE_ANALYSIS.md`)
+- **"Rotation rescues W4A4" is NOT novel** — Ω-QVLA / QuaRot / SpinQuant established it. Do not claim the mechanism.
+- Competitors (Ω-QVLA, DyQ-VLA) target **diffusion-head** VLAs (π0.5, GR00T); **we target L1-regression OFT** — different architecture, our differentiator.
+- They beat us on accuracy retention (98–99.5% vs our ~92%) — **do not compete on that axis.**
+- DyQ-VLA has a **measured 1.43× real speedup**; we have fake-quant only — **must get a real Orin kernel speedup.**
+- **Our open lanes:** real Jetson Orin deployment, energy (J/inference — nobody reports it), 16-transform taxonomy, L1-regression target.
+- **Architecture fact (verified):** every code path uses `L1RegressionActionHead`. **There is NO diffusion head** in this pipeline. We quantize the Llama-2-7B backbone; the L1 head stays bf16.
+- **Control rate (verified):** `OFT_CHUNK_SIZE=8`, so 330 ms/query = **~24 Hz effective** control. Report Hz, not ms.
+
 ---
 
 ## 13. Quick Reference Commands

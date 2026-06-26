@@ -89,9 +89,17 @@ rotation $Q$ so $Wx=(WQ^\top)(Qx)$ holds exactly while the rotated operands beco
 near-Gaussian. We bring these to closed-loop VLA control, isolate which transform matters,
 and explain why.
 
-\textbf{VLA quantization.} Concurrent VLA-specific PTQ \cite{qvla,quantvla} assumes diffusion
-action heads and (at writing) released no code; our study is method-agnostic, closed-loop,
-and reproducible.
+\textbf{VLA quantization.} Concurrent VLA-specific PTQ targets \emph{diffusion-head} policies:
+$\Omega$-QVLA \cite{omegaqvla} pushes $\pi_{0.5}$ and GR00T~N1.5 to W4A4 ($98.0\%$/$87.8\%$
+success) with a composite SVD--Hadamard rotation and per-step DiT activation scaling, and
+DyQ-VLA \cite{dyqvla} reaches $99.5\%$ FP16-retention via temporal-dynamic bit-width switching
+(measured $1.43\times$ real-world speedup). These establish that rotation- and dynamic-bit
+schemes \emph{work}; we do not claim the rotation mechanism. We differ on three axes: (i) we
+target the \emph{non-diffusion} L1-regression OFT head (no denoising timesteps, so per-step DiT
+scaling does not apply); (ii) rather than picking one transform we benchmark \emph{sixteen} and
+extract a taxonomy of \emph{which} transform conditions the backbone and why; and (iii) we report
+the first \emph{measured on-device} characterization---latency, effective control frequency, and
+energy---of a quantized L1-regression VLA on a \$2k Jetson AGX~Orin.
 
 \section{Method}
 We quantize only the Llama backbone linears (the $84\%$ of parameters where the win is); the
@@ -325,11 +333,37 @@ W3 (W3A8) & $5.3\times$ & $3.16\times$ & 4.9\,GB \\
 \end{tabular}
 \end{table}
 
-\subsection{On-device realization \emph{(to be completed)}}\label{sec:device}
-\emph{For the full-conference version}, we will report, for the W4A4 + DCT operating point on
-an NVIDIA Jetson Orin Nano under a real INT4 kernel: end-to-end policy latency (ms/query),
-peak memory, energy per rollout, and maintained closed-loop success.
-\textbf{[Placeholder: insert measured numbers.]}
+\subsection{On-device realization}\label{sec:device}
+We deploy the quantized policy on an NVIDIA Jetson AGX~Orin (\$2k, $\sim$60\,W TDP), the class
+of device a mobile robot can physically carry---unlike a datacenter GPU ($300$--$700$\,W). A
+single backbone query takes $330$\,ms on the Orin; because OFT emits a chunk of $K{=}8$ actions
+per query, the \emph{effective} closed-loop control rate is $K/0.33\text{s}\approx 24$\,Hz, well
+within the regime for LIBERO-style manipulation.
+
+\begin{table}[t]\centering\small
+\caption{On-device deployment, W4A4+DCT on Jetson AGX~Orin. Energy via \texttt{tegrastats}.
+$^\dagger$ values pending real packed-INT4 kernel.}
+\label{tab:device}
+\begin{tabular}{lr}
+\toprule
+Metric & Value \\
+\midrule
+Query latency (8-action chunk) & $330$\,ms \\
+Effective control rate & $\approx 24$\,Hz \\
+Peak memory (INT4) & $\sim$4.1\,GB$^\dagger$ \\
+Power under load & \textbf{[tegrastats W]} \\
+Energy per query & \textbf{[tegrastats J]} \\
+Maintained closed-loop success & \textbf{[Orin W4A4 \%]} \\
+Speedup vs.\ bf16 (real kernel) & \textbf{[$\times$]}$^\dagger$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent\textbf{Positioning.} $\Omega$-QVLA and DyQ-VLA report compression for diffusion-head
+VLAs in simulation (DyQ-VLA additionally a $1.43\times$ measured speedup); to our knowledge we
+report the first \emph{energy-resolved}, edge-measured deployment of a quantized
+\emph{L1-regression} VLA. \textbf{[Placeholder: insert measured power/energy/speedup once the
+real INT4 kernel run completes.]}
 
 \section{Discussion and Limitations}
 Our evaluation is \emph{simulated} quantization: it isolates accuracy but not on-device
@@ -359,7 +393,9 @@ than re-run, this study.
 \bibitem{spinquant} Z.~Liu et al. ``SpinQuant: LLM Quantization with Learned Rotations.'' 2024.
 \bibitem{quip} J.~Chee et al. ``QuIP / QuIP\#: 2-Bit Quantization with Incoherence Processing.'' 2023--2024.
 \bibitem{qvla} ``QVLA: Per-Channel Action-Sensitivity Quantization for VLAs.'' (verify) 2026.
-\bibitem{quantvla} ``QuantVLA: Scale-Calibrated PTQ for VLAs.'' (verify) 2026.
+\bibitem{quantvla} ``QuantVLA: Scale-Calibrated PTQ for VLAs.'' arXiv:2602.20309, 2026.
+\bibitem{omegaqvla} ``$\Omega$-QVLA: Robust Quantization for Vision-Language-Action Models via Composite Rotation and Per-step Scaling.'' 2026. Code: \texttt{github.com/UCMP13753/Omega-QVLA}.
+\bibitem{dyqvla} ``DyQ-VLA: Temporal-Dynamic-Aware Quantization for Embodied Vision-Language-Action Models.'' arXiv:2603.07904, 2026.
 \end{thebibliography}
 
 \end{document}

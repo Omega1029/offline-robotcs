@@ -1,0 +1,72 @@
+# pip requirements for OpenVLA-OFT training pipeline
+#
+# SETUP:
+#   python -m venv ~/venvs/openvla_oft    # or reuse your existing venv
+#   source ~/venvs/openvla_oft/bin/activate
+#   pip install -r envs/requirements.txt
+#
+# NOTE: torch/torchvision are NOT pinned here — install them first matching your
+# CUDA version, then run this file. If you already have torch installed, this
+# file will not downgrade it.
+#   CUDA 12.1: pip install torch==2.2.2+cu121 torchvision==0.17.2+cu121 --extra-index-url https://download.pytorch.org/whl/cu121
+#   CUDA 12.4: pip install torch torchvision --extra-index-url https://download.pytorch.org/whl/cu124
+#
+# ── HuggingFace (PINNED — do NOT upgrade transformers past 4.40.x) ──────────
+# transformers >= 4.45 reroutes VLM architectures to AutoModelForImageTextToText
+# internally, breaking OpenVLA-OFT's custom action head with no error raised.
+transformers==4.40.2
+tokenizers==0.19.1
+huggingface-hub==0.23.2
+accelerate==0.28.0
+# peft: 0.10.0 pinned for openvla-oft; 0.11.1 (as in finetune.py) also works
+peft>=0.10.0,<0.12.0
+safetensors==0.4.3
+
+# ── DeepSpeed (ZeRO-2 training) ─────────────────────────────────────────────
+# Build with fused ops for best H100 performance:
+#   DS_BUILD_FUSED_ADAM=1 pip install deepspeed==0.14.2 --no-binary deepspeed
+deepspeed==0.14.2
+
+# ── Robotics / simulation ────────────────────────────────────────────────────
+# robosuite MUST be 1.4.x for LIBERO compatibility
+robosuite==1.4.1
+mujoco==2.3.7
+imageio>=2.34.0
+imageio-ffmpeg>=0.5.0
+
+# ── Data / vision ────────────────────────────────────────────────────────────
+# numpy < 2.0 is a hard requirement — robosuite and LIBERO break on numpy 2.x
+numpy>=1.24.0,<2.0.0
+Pillow>=10.0.0
+opencv-python-headless>=4.9.0
+einops>=0.7.0
+h5py>=3.11.0
+
+# ── Model utilities ──────────────────────────────────────────────────────────
+timm>=0.9.10,<1.0.0
+sentencepiece>=0.2.0
+protobuf>=4.25.0
+
+# ── Quantization ─────────────────────────────────────────────────────────────
+# autoawq-kernels version must match autoawq exactly
+autoawq==0.2.5
+autoawq-kernels==0.0.6
+
+# ── Training infrastructure ──────────────────────────────────────────────────
+wandb>=0.17.0
+tensorboard>=2.17.0
+tqdm>=4.66.0
+hydra-core>=1.3.0
+omegaconf>=2.3.0
+
+# ── Misc ─────────────────────────────────────────────────────────────────────
+scipy>=1.13.0
+pyquaternion>=0.9.9
+easydict>=1.13
+pandas>=2.0.0
+matplotlib>=3.8.0
+
+# ── openvla-oft and LIBERO (install from git after this file) ────────────────
+# These are not on PyPI:
+#   pip install -e openvla-oft/
+#   pip install git+https://github.com/Lifelong-Robot-Learning/LIBERO.git@master

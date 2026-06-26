@@ -1,0 +1,56 @@
+{
+  "_comment": "ZeRO-2 + CPU optimizer offload for single-GPU (or low-GPU-count) runs. Full fine-tuning needs ~123 GB of param/grad/optimizer state — over one H100's 80 GB — so AdamW state lives in pinned host RAM and the optimizer step runs on CPU. Expect roughly 2-3x slower steps than the 8-GPU ds_zero2.json setup.",
+
+  "zero_optimization": {
+    "stage": 2,
+    "allgather_partitions": true,
+    "allgather_bucket_size": 500000000,
+    "overlap_comm": true,
+    "reduce_scatter": true,
+    "reduce_bucket_size": 500000000,
+    "contiguous_gradients": true,
+    "offload_optimizer": {
+      "device": "cpu",
+      "pin_memory": true
+    }
+  },
+
+  "bf16": {
+    "enabled": true
+  },
+  "fp16": {
+    "enabled": false
+  },
+
+  "gradient_clipping": 1.0,
+
+  "train_micro_batch_size_per_gpu": "auto",
+  "gradient_accumulation_steps": "auto",
+  "train_batch_size": "auto",
+
+  "optimizer": {
+    "type": "AdamW",
+    "params": {
+      "lr": "auto",
+      "betas": [0.9, 0.95],
+      "eps": 1e-8,
+      "weight_decay": 0.0
+    }
+  },
+
+  "scheduler": {
+    "type": "WarmupDecayLR",
+    "params": {
+      "warmup_min_lr": 0,
+      "warmup_max_lr": "auto",
+      "warmup_num_steps": "auto",
+      "total_num_steps": "auto"
+    }
+  },
+
+  "zero_allow_untested_optimizer": true,
+  "wall_clock_breakdown": false,
+  "comms_logger": {
+    "enabled": false
+  }
+}

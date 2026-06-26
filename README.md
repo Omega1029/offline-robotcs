@@ -131,6 +131,22 @@ From image: frame_000008_20250822_182052_781.jpg
 
 ---
 
+### 6. OpenVLA 7B Proof of Concept
+
+This repository also includes a Proof of Concept (POC) for fine-tuning the full **OpenVLA-7B** model using LoRA adapters on the Bridge dataset.
+
+To run the fine-tuning POC:
+```bash
+python openvla_poc.py
+```
+
+To evaluate the fine-tuned model frame-by-frame on a full trajectory:
+```bash
+python test_finetune_openvla.py
+```
+
+---
+
 ## ⚙️ ROS 2 Integration
 
 SmolVLA integrates directly into ROS 2 through publishers and subscribers:

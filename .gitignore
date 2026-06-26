@@ -4,6 +4,8 @@ __pycache__/
 *.egg-info/
 *.egg
 .eggs/
+*.pyc
+*.pyo
 
 # Virtual environment
 venv/
@@ -11,27 +13,36 @@ env/
 .env
 
 # Large model artifacts (not tracked — too large for git)
-quant_bench/checkpoints/
-quant_bench/*.gguf
-quant_bench/hf_cache/
-quant_bench/_gguf_staging/
 *.gguf
 *.safetensors
 *.bin
 *.pt
+*.ckpt
+*.h5
 
-# llama.cpp (external repo — rebuild from source)
+# Checkpoint / dataset dirs
+checkpoints/
+datasets/
+quant_bench/checkpoints/
+quant_bench/hf_cache/
+quant_bench/_gguf_staging/
+quant_bench/*.gguf
+
+# External repos (rebuild/install separately)
 llama.cpp/
-
-# openvla-oft (external repo — install via pip)
 openvla-oft/
 quant_bench/openvla-oft/
+openvla_oft_pipeline/LIBERO/
+openvla_oft_pipeline/openvla-oft/
+openvla_oft_pipeline/openvla/
 
-# LIBERO datasets and data splits
+# LIBERO datasets
 LIBERO/
 libero_subset/
-satellite/
 libero_subset_15demos.tar.gz
+
+# Satellite data
+satellite/
 
 # Temp images and frames
 *.jpg
@@ -41,7 +52,7 @@ tmp_frame*
 captured_frames/
 latest
 
-# Model checkpoint dirs (remote patterns)
+# Model checkpoint dirs
 MiniCPM-V-2_6/
 Phi-3-vision-128k-instruct/
 smolvlm*/
@@ -50,9 +61,19 @@ ubuntu*/
 turtlebot*/
 .idea*/
 
-# Misc
-.ipynb_checkpoints/
+# Misc large files
+archive.zip
+=1.3.0
+results/
+
+# Logs / temp
 *.log
+*.tmp
+*.jsonl
 temp.txt
 help.txt
 zero_to_fp32.py
+
+# Jupyter
+*.ipynb
+.ipynb_checkpoints/

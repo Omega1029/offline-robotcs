@@ -1,0 +1,62 @@
+# Jetson Orin Nano deployment requirements
+# JetPack 6.0+ (CUDA 12.2) recommended for best AWQ compatibility
+#
+# SETUP SEQUENCE (run on Jetson):
+# 1. Flash JetPack 6.0 via SDK Manager on host machine
+# 2. On Jetson: sudo apt install python3.10 python3.10-venv python3.10-dev
+# 3. python3.10 -m venv ~/venvs/openvla_deploy
+# 4. source ~/venvs/openvla_deploy/bin/activate
+#
+# 5. Install Jetson-specific PyTorch wheel (NOT from standard PyPI — it has no GPU):
+#    Check https://forums.developer.nvidia.com/t/pytorch-for-jetson/72048 for
+#    the current JetPack 6 wheel. As of JetPack 6.0:
+#      wget https://developer.download.nvidia.com/compute/redist/jp/v60dp/pytorch/torch-2.2.0a0+6a974be.nv23.11-cp310-cp310-linux_aarch64.whl
+#      pip install torch-2.2.0a0+...linux_aarch64.whl
+#    CUDA availability check: python -c "import torch; print(torch.cuda.is_available())"
+#    Expected: True (if False, you installed the wrong wheel)
+#
+# 6. Install jetson-stats for power monitoring:
+#    sudo pip3 install jetson-stats==4.2.7
+#    sudo systemctl restart jtop.service
+#
+# 7. Install remaining requirements:
+#    pip install -r jetson_requirements.txt
+#
+# 8. For LIBERO rollouts on Jetson (optional — only needed for full eval, not latency bench):
+#    Install libero from git (same as training env)
+#    Note: LIBERO sim is CPU-bound on Jetson — expect ~1-2 FPS sim speed.
+#    Set MUJOCO_GL=egl for headless; osmesa works but is ~3x slower.
+
+# ── HuggingFace stack (same pins as training — MUST match model save version) ──
+transformers==4.40.2
+tokenizers==0.19.1
+huggingface-hub==0.23.2
+accelerate==0.28.0
+peft==0.10.0
+safetensors==0.4.3
+
+# ── AWQ inference ────────────────────────────────────────────────────────────
+# autoawq on aarch64 may need to build from source if no wheel is available:
+#   pip install autoawq --no-binary autoawq
+# If CUDA kernels fail, try: pip install autoawq --extra-index-url https://...
+autoawq==0.2.5
+
+# ── Data / vision ────────────────────────────────────────────────────────────
+numpy==1.26.4
+Pillow==10.3.0
+opencv-python-headless==4.9.0.80
+einops==0.7.0
+h5py==3.11.0
+
+# ── Model utilities ──────────────────────────────────────────────────────────
+timm==0.9.16
+sentencepiece==0.2.0
+protobuf==4.25.3
+
+# ── Monitoring / export ──────────────────────────────────────────────────────
+# jetson-stats is installed system-wide via sudo (see step 6 above), not here
+pandas==2.0.3
+scipy==1.13.1
+pyquaternion==0.9.9
+tqdm==4.66.4
+matplotlib==3.8.4

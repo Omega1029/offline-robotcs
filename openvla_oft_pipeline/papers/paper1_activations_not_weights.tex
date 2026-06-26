@@ -1,0 +1,267 @@
+\documentclass[11pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+\usepackage{authblk}
+
+% ============================================================================
+% PAPER 1 (anchor / main empirical study)
+% NOTE: all numerical results are real measurements from the accompanying code
+% release. Replace placeholder author/affiliation/citation details before
+% submission, and verify the bibliographic entries (years/venues) in the
+% thebibliography block.
+% ============================================================================
+
+\title{\textbf{Activations, Not Weights: Incoherence Processing Enables\\
+W4A4 Quantization of Vision--Language--Action Policies}}
+\author[1]{Author One}
+\author[1]{Author Two}
+\affil[1]{Affiliation, \texttt{\{a1,a2\}@institution.edu}}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Vision--Language--Action (VLA) policies built on 7B-parameter language backbones are
+accurate but too large for on-board robot inference. We study post-training quantization
+of an OpenVLA-OFT policy on the LIBERO benchmark and report a clean, actionable finding:
+\emph{for closed-loop VLA control, the quantization bottleneck is activation outliers, not
+weights.} Naive per-channel weight quantization is already near-lossless down to 4 bits
+($90.75\%$ vs.\ a $90.25\%$ bf16 baseline), but quantizing activations to 4 bits collapses
+the policy to $0\%$ task success because a handful of channels carry magnitudes up to
+$10^5\times$ the median, destroying the per-tensor activation scale. A single orthogonal
+incoherence rotation (Hadamard/QuaRot-style) applied before quantization spreads that energy
+into a near-Gaussian distribution---cutting the median activation outlier ratio from $18.0$
+to $1.6$ and the INT4 per-tensor quantization error from $96\%$ to $26\%$---and restores
+\textbf{W4A4 closed-loop success to $88.8$--$90.5\%$ ($98$--$100\%$ retention)} at $2.7\times$
+whole-model compression ($4\times$ on the quantized backbone). We map the full bit-width
+frontier (W4A4 and W3A8 are free; W3A4 is the accuracy-trading cliff; all sub-2-bit weight
+settings are unreachable regardless of preconditioning) and release the code and evaluation
+harness.
+\end{abstract}
+
+\section{Introduction}
+Vision--Language--Action models adapt large vision--language backbones into robot policies
+that map an image and a language instruction to low-level actions
+\cite{openvla,openvlaoft}. State-of-the-art accuracy comes from 7B-parameter backbones, but
+deploying such models on embedded robot compute (e.g.\ NVIDIA Jetson-class devices) requires
+aggressive compression. Post-training quantization (PTQ) is the natural tool, yet most PTQ
+research targets language-model perplexity or open-loop token accuracy
+\cite{gptq,awq,smoothquant,quarot,spinquant}, not \emph{closed-loop} robot task success,
+where per-step errors compound over long horizons.
+
+We ask a simple question: \emph{where does quantization actually hurt a VLA policy, and what
+is the cheapest intervention that fixes it?} Through a controlled study on an OpenVLA-OFT
+policy evaluated closed-loop on the four LIBERO suites \cite{libero}, we find that:
+\begin{enumerate}
+  \item \textbf{Weights are easy.} Per-channel symmetric weight quantization is near-lossless
+        to 4 bits and only mildly lossy at 3 bits.
+  \item \textbf{Activations are the wall.} Naive 4-bit activation quantization collapses the
+        policy to $0\%$ success, caused by extreme per-channel outliers (massive activations).
+  \item \textbf{One rotation fixes it.} An orthogonal incoherence rotation restores
+        \textbf{W4A4} to near-baseline success, the regime that yields $4\times$ weight
+        compression \emph{and} INT4 compute.
+\end{enumerate}
+We additionally chart the reachable bit-width frontier and quantify the model-size reduction.
+
+\section{Background and Related Work}
+\textbf{VLA policies.} OpenVLA \cite{openvla} and OpenVLA-OFT \cite{openvlaoft} couple a
+vision encoder and a Llama-2-7B backbone with an action head; OFT replaces autoregressive
+action-token decoding with a continuous regression head over the backbone's last-layer
+hidden states, queried once per action chunk.
+
+\textbf{PTQ and outliers.} Weight-only PTQ (GPTQ \cite{gptq}, AWQ \cite{awq}) is mature.
+Activation quantization is harder because of outlier channels; SmoothQuant \cite{smoothquant}
+migrates scale from activations to weights, while \emph{incoherence processing}
+(QuaRot \cite{quarot}, SpinQuant \cite{spinquant}, QuIP \cite{quip}) applies an orthogonal
+rotation $Q$ so that $Wx=(WQ^\top)(Qx)$ holds exactly while the rotated operands become
+near-Gaussian. We bring these tools to the closed-loop VLA setting and isolate which one
+matters.
+
+\textbf{VLA quantization.} Concurrent work proposes VLA-specific PTQ
+\cite{qvla,quantvla}, but assumes diffusion action heads and (at the time of writing)
+released no code. Our study is method-agnostic, closed-loop, and reproducible.
+
+\section{Method}
+We quantize only the Llama backbone linears (the $84\%$ of parameters where the win is);
+the vision tower, projector, lm\_head, embeddings, and the regression action head remain
+bf16. All experiments use \emph{simulated} (fake) quantization---quantize then dequantize in
+floating point---so that closed-loop success isolates the algorithm from kernel artifacts.
+
+\paragraph{Weight quantization.} Symmetric per-output-channel: for a weight row $w$ with
+$b$ bits, $\hat w=\mathrm{round}(w/s)\,s$ with $s=\max|w|/(2^{b-1}-1)$.
+
+\paragraph{Activation quantization.} Per-token symmetric at $a$ bits (one scale per sequence
+position). We denote a configuration W$b$A$a$.
+
+\paragraph{Incoherence rotation.} For each backbone linear we insert a shared orthogonal
+$Q$ on the input axis,
+\begin{equation}
+y = Wx = (WQ^\top)(Qx),
+\end{equation}
+and quantize the rotated weight $WQ^\top$ and rotated activation $Qx$. Because $Q$ is
+orthogonal the computation is exact in floating point; quantization, however, now sees
+operands whose energy is spread across channels. We use a Hadamard rotation where the input
+dimension is a power of two and a random orthogonal matrix otherwise.
+
+\section{Experimental Setup}
+The policy is an OpenVLA-OFT checkpoint fine-tuned on LIBERO (bf16 average success
+$90.25\%$). We evaluate closed-loop on all four suites (\textsc{spatial}, \textsc{object},
+\textsc{goal}, \textsc{long}), $10$ tasks $\times\,10$ rollouts each $=400$ rollouts, up to
+$600$ simulator steps per rollout. Each rollout queries the quantized model once per
+$8$-action chunk. Reported numbers are average success rate; the binomial CI at $400$
+rollouts is $\approx\pm2.5\%$.
+
+\section{Results}
+
+\subsection{Weights are easy, activations are the wall}
+Table~\ref{tab:main} gives full-eval results. Naive weight quantization is near-lossless to
+4 bits, but naive W4A4 collapses to $0\%$. A single rotation restores W4A4 to $88.8\%$ and
+the various global rotations cluster at $88.8$--$90.5\%$ ($98$--$100\%$ retention).
+
+\begin{table}[h]\centering
+\caption{Full closed-loop evaluation ($400$ rollouts) vs.\ the bf16 baseline ($90.25\%$).
+Effective bits are weight bits on the quantized backbone.}
+\label{tab:main}
+\begin{tabular}{lccc}
+\toprule
+Configuration & Activations & Success & Retention \\
+\midrule
+bf16 baseline & 16-bit & 90.25\% & --- \\
+\midrule
+Naive W4 (per-channel) & 16-bit & 90.75\% & 100.6\% \\
+Rotated W4 & 16-bit & 89.0\% & 98.6\% \\
+\textbf{Naive W4A4} & \textbf{4-bit} & \textbf{0.0\%} & \textbf{0\%} \\
+\textbf{Rotated W4A4 (Hadamard)} & \textbf{4-bit} & \textbf{88.8\%} & \textbf{98.4\%} \\
+Rotated W4A4 (random orth.) & 4-bit & 90.5\% & 100.3\% \\
+Rotated W3A8 & 8-bit & 88.8\% & 98.4\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Per-suite: the cost concentrates in long-horizon tasks}
+Table~\ref{tab:persuite} shows the (small) quantization cost falls almost entirely on
+\textsc{libero-long}; short-horizon suites are preserved within noise---consistent with
+per-step error accumulating over long rollouts.
+
+\begin{table}[h]\centering
+\caption{Per-suite success (\%) at W4A4 vs.\ bf16.}
+\label{tab:persuite}
+\begin{tabular}{lcccc}
+\toprule
+Suite & bf16 & Rot.\ W4A4 & Rot.\ W4 & Rot.\ W3A8 \\
+\midrule
+spatial & 87 & 87 & 88 & 87 \\
+object  & 99 & 97 & 99 & 98 \\
+goal    & 86 & 88 & 86 & 84 \\
+long    & 89 & 83 & 83 & 86 \\
+\midrule
+average & 90.25 & 88.8 & 89.0 & 88.8 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Mechanism: rotation crushes activation outliers}
+Table~\ref{tab:mech} measures, per backbone linear over a calibration buffer, the activation
+outlier ratio (max-channel / median-channel magnitude) and the INT4 per-tensor quantization
+error, before and after the rotation. Rotation reduces the median outlier ratio by $11\times$
+and the worst by four orders of magnitude. The worst single layer
+(\texttt{layers.1.mlp.down\_proj}) carries a channel $\sim\!10^5\times$ the median---a
+``massive activation''---which alone sets the per-tensor scale and zeroes the rest, explaining
+the $0\%$ naive-W4A4 result.
+
+\begin{table}[h]\centering
+\caption{Activation conditioning before vs.\ after the rotation (median over 224 backbone
+linears).}
+\label{tab:mech}
+\begin{tabular}{lccc}
+\toprule
+Metric & Pre-rotation & Post-rotation & Factor \\
+\midrule
+median activation outlier ratio & 18.0 & 1.6 & $11\times$ \\
+max activation outlier ratio & 105{,}928 & 6.2 & $17{,}000\times$ \\
+median INT4 per-tensor error & 96.5\% & 26.1\% & $3.7\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The residual $\sim\!26\%$ error is the \emph{information-theoretic floor} of 4-bit (16 levels)
+on a well-conditioned distribution, not a failure of the rotation: error halves per added bit
+(W8 activations reach $\sim\!2\%$, i.e.\ lossless). Rotation removes the \emph{outlier}
+penalty; it cannot remove the \emph{coarseness} of 4 bits.
+
+\subsection{The reachable bit-width frontier}
+Screening on \textsc{libero-spatial} (Table~\ref{tab:frontier}), W4A4 and W3A8 are free,
+W3A4 is the accuracy-trading cliff, and every sub-2-bit weight configuration collapses to
+$0\%$---\emph{including} W2A8 with rotation, showing the 2-bit wall is a representational
+limit of the \emph{weights}, unfixable by activation precision or preconditioning.
+
+\begin{table}[h]\centering
+\caption{Bit-width frontier (\textsc{spatial} screen; lossless cluster $\approx 77$--$80\%$).}
+\label{tab:frontier}
+\begin{tabular}{lcc}
+\toprule
+Regime & Representative configs & Screen success \\
+\midrule
+Free lunch & W4, W3, W4A8, W4A4, W3A8 & $76$--$83\%$ \\
+Cliff edge & W3A4 (rotated) & $70\%$ \\
+Unreachable & any W2 (incl.\ W2A8 rotated) & $0\%$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Model-size reduction}
+The checkpoint is $7.69$B parameters ($15.4$\,GB bf16); the quantized backbone is $6.48$B
+($84\%$). Table~\ref{tab:size} reports compression. W4A4 yields $2.7\times$ whole-model
+reduction ($4\times$ on the quantized backbone); activation quantization does not reduce file
+size but cuts runtime activation bandwidth $\sim\!4\times$ and enables INT4 compute.
+
+\begin{table}[h]\centering
+\caption{Model size by weight bit-width (backbone quantized; tower/heads stay bf16).}
+\label{tab:size}
+\begin{tabular}{lccc}
+\toprule
+Setting & Backbone & Whole model & Size \\
+\midrule
+bf16 & $1\times$ & $1\times$ & 15.4\,GB \\
+W8 & $2.0\times$ & $1.73\times$ & 8.9\,GB \\
+\textbf{W4} & $4.0\times$ & $2.71\times$ & 5.7\,GB \\
+W3 & $5.3\times$ & $3.16\times$ & 4.9\,GB \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Discussion and Limitations}
+Our evaluation is \emph{simulated} quantization: it isolates accuracy but does not measure
+on-device latency or energy; a real INT4 kernel on embedded hardware is the natural next
+step and the realization of the $2.7\times$/$4\times$ claims. We study one model and one
+benchmark; generalization to other VLA architectures and to physical robots remains open.
+Reported numbers are single-seed at $400$ rollouts ($\pm2.5\%$ CI).
+
+\section{Conclusion}
+For closed-loop VLA control, activation outliers---not weights---are the quantization
+bottleneck, and a single orthogonal rotation removes them, enabling W4A4 at $98$--$100\%$
+task retention and $2.7\times$ model compression. The recipe is simple, training-free, and
+reproducible.
+
+\begin{thebibliography}{99}
+\small
+\bibitem{openvla} A.~Kim et al. ``OpenVLA: An Open-Source Vision-Language-Action Model.'' 2024.
+\bibitem{openvlaoft} M.~Kim et al. ``Fine-Tuning Vision-Language-Action Models (OpenVLA-OFT).'' 2025.
+\bibitem{libero} B.~Liu et al. ``LIBERO: Benchmarking Knowledge Transfer for Lifelong Robot Learning.'' 2023.
+\bibitem{gptq} E.~Frantar et al. ``GPTQ: Accurate Post-Training Quantization for Generative Pre-trained Transformers.'' 2022.
+\bibitem{awq} J.~Lin et al. ``AWQ: Activation-aware Weight Quantization for LLM Compression.'' 2023.
+\bibitem{smoothquant} G.~Xiao et al. ``SmoothQuant: Accurate and Efficient Post-Training Quantization for LLMs.'' 2022.
+\bibitem{quarot} S.~Ashkboos et al. ``QuaRot: Outlier-Free 4-Bit Inference in Rotated LLMs.'' 2024.
+\bibitem{spinquant} Z.~Liu et al. ``SpinQuant: LLM Quantization with Learned Rotations.'' 2024.
+\bibitem{quip} J.~Chee et al. ``QuIP: 2-Bit Quantization of Large Language Models with Guarantees.'' 2023.
+\bibitem{qvla} ``QVLA: Per-Channel Action-Sensitivity Quantization for VLAs.'' (verify) 2026.
+\bibitem{quantvla} ``QuantVLA: Scale-Calibrated PTQ for VLAs.'' (verify) 2026.
+\end{thebibliography}
+
+\end{document}

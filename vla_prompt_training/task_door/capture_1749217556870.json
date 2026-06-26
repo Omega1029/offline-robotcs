@@ -1,0 +1,6 @@
+{
+    "image": "capture_1749217556870.jpg",
+    "instruction": "Navigate to the entrance",
+    "command_raw": "linear_x: 0.55, angular_z: 0.0",
+    "command_translated": "forward_0.6_0.2s"
+}

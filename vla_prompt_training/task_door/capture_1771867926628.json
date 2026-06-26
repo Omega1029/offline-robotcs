@@ -1,0 +1,7 @@
+{
+    "image": "capture_1771867926628.jpg",
+    "instruction": "Navigate to the First Door",
+    "command_translated": "forward_1.0_0.2s",
+    "command_raw": "forward",
+    "timestamp": 1771867926628
+}

@@ -9,7 +9,7 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 # ================================================================
 #  Load processor and base model
 # ================================================================
-ft_dir = "./smolvlm_turtlebot_action_ft"
+ft_dir = "./smolvlm_turtlebot_vla"
 print(f"Loading fine-tuned model from: {ft_dir}")
 
 # Load processor
@@ -30,7 +30,7 @@ print("✅ Model and LoRA adapter loaded.\n")
 
 print("Running quick inference test...")
 
-test_img = "captured_frames/captured_frames/frame_000016_20250604_144135_525.jpg"  # or train_ds[0]["image"]
+test_img = "vla_prompt_training/fifth_prompt/capture_1749049130206.jpg"  # or train_ds[0]["image"]
 if not os.path.exists(test_img):
     raise FileNotFoundError
     
@@ -50,10 +50,12 @@ messages = [
 prompt = processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
 inputs = processor(images=[img], text=[prompt], return_tensors="pt").to(DEVICE)
 
-with torch.inference_mode():
-    outputs = model.generate(**inputs, max_new_tokens=15)
 
-result = processor.batch_decode(outputs, skip_special_tokens=True)[0]
-print("Predicted:", result['Assistant'])
+with torch.inference_mode():
+    outputs = model.generate(**inputs, max_new_tokens=320)
+    generated = outputs[:, inputs["input_ids"].shape[1]:]
+    
+result = processor.batch_decode(generated, skip_special_tokens=True)[0]
+print("Predicted:", result)
 
 print("From image:", os.path.basename(test_img))

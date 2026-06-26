@@ -1,0 +1,6 @@
+{
+    "image": "capture_1749217491746.jpg",
+    "instruction": "Return Home to the dock",
+    "command_raw": "linear_x: 0.0, angular_z: 1.0",
+    "command_translated": "left_1.0_0.2s"
+}

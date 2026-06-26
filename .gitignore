@@ -41,6 +41,15 @@ tmp_frame*
 captured_frames/
 latest
 
+# Model checkpoint dirs (remote patterns)
+MiniCPM-V-2_6/
+Phi-3-vision-128k-instruct/
+smolvlm*/
+482adb*/
+ubuntu*/
+turtlebot*/
+.idea*/
+
 # Misc
 .ipynb_checkpoints/
 *.log

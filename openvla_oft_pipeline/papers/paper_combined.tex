@@ -319,6 +319,17 @@ bf16 / DCT-W4A4 / bf16 & $84.0\%$ & $5.7$\,GB & $97.7\%$ \\
 \end{tabular}
 \end{table}
 
+\paragraph{Paper-grade all-suite result.} Evaluated across all four LIBERO suites
+($10{\times}10{\times}4=400$ rollouts, bf16 baseline $88.0\%$), the deployment configuration
+\textbf{vision INT8 $+$ DCT-W3A8 backbone $+$ head INT8} reaches $89.5\%$ --- a
+$\mathbf{74\%}$ \textbf{smaller model at no measurable accuracy loss} ($89.5\%$ vs.\ $88.0\%$ is
+within the $\pm2.5\%$ binomial CI at $400$ rollouts, i.e.\ statistically indistinguishable from
+bf16). The W4A4 variant gives a second frontier point ($86.2\%$, $69\%$ smaller, $98.0\%$
+retention). Notably W3\textbf{A8} matches/exceeds W4\textbf{A4} at \emph{smaller} size: once the
+DCT rotation conditions the activations, weight precision is cheap and activation precision is what
+remains---consistent with the activations-are-the-wall mechanism (Sec.~\ref{sec:wall}). All numbers
+are simulated quantization; the real-INT-kernel on-device realization is Sec.~\ref{sec:device}.
+
 \subsection{The reachable bit-width frontier}\label{sec:reach}
 Three regimes appear cleanly (Table~\ref{tab:reach}). Notably, rotation plus near-lossless
 8-bit activations (W2A8) still yields $0\%$: the 2-bit wall is a \emph{weight} representational

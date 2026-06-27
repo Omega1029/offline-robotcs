@@ -246,10 +246,12 @@ Orin's public key installed in `~/.ssh/authorized_keys` on A100. Reverse connect
 3. **Edge deployment paper**: Jetson AGX Orin numbers, GGUF vs BnB vs TensorRT-LLM
 
 ### Key Claims (currently supported)
-- Hadamard/DCT rotation rescues W4A4 from 0% → 88–90% success
+- **HEADLINE (all-4-suite, 400 rollouts): vision-INT8 + DCT-W3A8 backbone + head-INT8 = 74% smaller at 89.5% success vs 88.0% bf16 — no measurable accuracy loss (within ±2.5% CI). Strongest goal met: smaller size, same success.**
+- Component sensitivity: action head is the floor (INT8 ok, INT4→70%, INT3→50%); vision tower is free (INT8/FP8 lossless)
+- W3A8 ≥ W4A4 at smaller size — post-rotation, activation bits dominate weight bits (activations-are-the-wall)
+- Hadamard/DCT rotation rescues W4A4 from 0% → 88–90% success (mechanism, NOT novel — Ω-QVLA/QuaRot own it)
 - DCT is optimal deployment transform (deterministic, no size-constraint fallback)
-- BnB INT4 = 2.63× memory reduction at 5% accuracy cost (Goal C satisfied)
-- GGUF Q4_K_M = 3.3× smaller, deployable on Jetson
+- All numbers fake-quant; real INT4-kernel size/latency on Jetson Orin is the remaining gap
 
 ### What's Needed for Submission
 - [ ] Reference model (2-cam+proprio) bf16 baseline confirmed at ~97%

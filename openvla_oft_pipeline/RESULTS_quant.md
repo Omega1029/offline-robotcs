@@ -93,6 +93,22 @@ Givens (partial), PCA (concentrates energy — opposite), and ZCA (non-orthogona
 
 ## 4c. Component-wise grid (`20_component_grid.py`) — vision / backbone / head
 
+### ★ HEADLINE — paper-grade ALL-4-SUITE eval (10 tasks × 10 rollouts × 4 suites = 400 rollouts)
+
+| config | all-suite success | retention vs bf16 88.0% | size | reduction |
+|---|---|---|---|---|
+| bf16 baseline | 88.0% | 100% | 15.39 GB | — |
+| **`combo_v8_b3a8dct_h8`** (vision INT8 + DCT-W3A8 + head INT8) | **89.5%** | **101.7%** | **3.98 GB** | **74%↓** |
+| `combo_v8_b4dct_h8` (vision INT8 + DCT-W4A4 + head INT8) | 86.2% | 98.0% | 4.79 GB | 69%↓ |
+
+**The deployment pick `combo_v8_b3a8dct_h8` is 74% smaller at NO measurable accuracy loss**
+(89.5% vs 88.0% bf16, within the ±2.5% binomial CI at 400 rollouts — i.e. statistically
+indistinguishable from bf16, *not* "better"). This satisfies the strongest project goal:
+**smaller size at same success.** The W4A4 variant gives a second frontier point: 69% smaller at
+98.0% retention. (Fake-quant; real INT4-kernel size/latency on Jetson is the remaining gap.)
+
+---
+
 Treats OFT as three independently-quantizable components. Mono-cam epoch_003, fake-quant.
 **Component sensitivity** (libero_spatial, 4 tasks × 5 rollouts screen — isolate one, others bf16):
 

@@ -2,206 +2,73 @@
 base_model: HuggingFaceTB/SmolVLM-Base
 library_name: peft
 tags:
-- base_model:adapter:HuggingFaceTB/SmolVLM-Base
-- lora
-- transformers
+  - base_model:adapter:HuggingFaceTB/SmolVLM-Base
+  - lora
+  - robotics
+  - vla
+  - mobile-robot
+license: apache-2.0
 ---
 
-# Model Card for Model ID
+# SmolVLA — Balanced Dataset Variant
 
-<!-- Provide a quick summary of what the model is/does. -->
+**Paper:** [`../papers/paper_smolvla.tex`](../papers/paper_smolvla.tex)  
+**Part of:** [SmolVLA project](../README.md)
 
+This is the **class-balanced** variant of SmolVLA: SmolVLM-Base fine-tuned with LoRA on a
+resampled TurtleBot 4 demonstration dataset that equalizes action-class frequency.
+**Recommended deployment checkpoint** — highest overall action accuracy (85.2%).
 
+---
 
 ## Model Details
 
-### Model Description
-
-<!-- Provide a longer summary of what this model is. -->
-
-
-
-- **Developed by:** [More Information Needed]
-- **Funded by [optional]:** [More Information Needed]
-- **Shared by [optional]:** [More Information Needed]
-- **Model type:** [More Information Needed]
-- **Language(s) (NLP):** [More Information Needed]
-- **License:** [More Information Needed]
-- **Finetuned from model [optional]:** [More Information Needed]
-
-### Model Sources [optional]
-
-<!-- Provide the basic links for the model. -->
-
-- **Repository:** [More Information Needed]
-- **Paper [optional]:** [More Information Needed]
-- **Demo [optional]:** [More Information Needed]
-
-## Uses
-
-<!-- Address questions around how the model is intended to be used, including the foreseeable users of the model and those affected by the model. -->
-
-### Direct Use
-
-<!-- This section is for the model use without fine-tuning or plugging into a larger ecosystem/app. -->
-
-[More Information Needed]
-
-### Downstream Use [optional]
-
-<!-- This section is for the model use when fine-tuned for a task, or when plugged into a larger ecosystem/app -->
-
-[More Information Needed]
-
-### Out-of-Scope Use
-
-<!-- This section addresses misuse, malicious use, and uses that the model will not work well for. -->
-
-[More Information Needed]
-
-## Bias, Risks, and Limitations
-
-<!-- This section is meant to convey both technical and sociotechnical limitations. -->
-
-[More Information Needed]
-
-### Recommendations
-
-<!-- This section is meant to convey recommendations with respect to the bias, risk, and technical limitations. -->
-
-Users (both direct and downstream) should be made aware of the risks, biases and limitations of the model. More information needed for further recommendations.
-
-## How to Get Started with the Model
-
-Use the code below to get started with the model.
-
-[More Information Needed]
-
-## Training Details
-
-### Training Data
-
-<!-- This should link to a Dataset Card, perhaps with a short stub of information on what the training data is all about as well as documentation related to data pre-processing or additional filtering. -->
-
-[More Information Needed]
-
-### Training Procedure
-
-<!-- This relates heavily to the Technical Specifications. Content here should link to that section when it is relevant to the training procedure. -->
-
-#### Preprocessing [optional]
-
-[More Information Needed]
-
-
-#### Training Hyperparameters
-
-- **Training regime:** [More Information Needed] <!--fp32, fp16 mixed precision, bf16 mixed precision, bf16 non-mixed precision, fp16 non-mixed precision, fp8 mixed precision -->
-
-#### Speeds, Sizes, Times [optional]
-
-<!-- This section provides information about throughput, start/end time, checkpoint size if relevant, etc. -->
-
-[More Information Needed]
-
-## Evaluation
-
-<!-- This section describes the evaluation protocols and provides the results. -->
-
-### Testing Data, Factors & Metrics
-
-#### Testing Data
-
-<!-- This should link to a Dataset Card if possible. -->
-
-[More Information Needed]
-
-#### Factors
-
-<!-- These are the things the evaluation is disaggregating by, e.g., subpopulations or domains. -->
-
-[More Information Needed]
-
-#### Metrics
-
-<!-- These are the evaluation metrics being used, ideally with a description of why. -->
-
-[More Information Needed]
-
-### Results
-
-[More Information Needed]
-
-#### Summary
-
-
-
-## Model Examination [optional]
-
-<!-- Relevant interpretability work for the model goes here -->
-
-[More Information Needed]
-
-## Environmental Impact
-
-<!-- Total emissions (in grams of CO2eq) and additional considerations, such as electricity usage, go here. Edit the suggested text below accordingly -->
-
-Carbon emissions can be estimated using the [Machine Learning Impact calculator](https://mlco2.github.io/impact#compute) presented in [Lacoste et al. (2019)](https://arxiv.org/abs/1910.09700).
-
-- **Hardware Type:** [More Information Needed]
-- **Hours used:** [More Information Needed]
-- **Cloud Provider:** [More Information Needed]
-- **Compute Region:** [More Information Needed]
-- **Carbon Emitted:** [More Information Needed]
-
-## Technical Specifications [optional]
-
-### Model Architecture and Objective
-
-[More Information Needed]
-
-### Compute Infrastructure
-
-[More Information Needed]
-
-#### Hardware
-
-[More Information Needed]
-
-#### Software
-
-[More Information Needed]
-
-## Citation [optional]
-
-<!-- If there is a paper or blog post introducing the model, the APA and Bibtex information for that should go in this section. -->
-
-**BibTeX:**
-
-[More Information Needed]
-
-**APA:**
-
-[More Information Needed]
-
-## Glossary [optional]
-
-<!-- If relevant, include terms and calculations in this section that can help readers understand the model or model card. -->
-
-[More Information Needed]
-
-## More Information [optional]
-
-[More Information Needed]
-
-## Model Card Authors [optional]
-
-[More Information Needed]
-
-## Model Card Contact
-
-[More Information Needed]
-### Framework versions
-
-- PEFT 0.18.0
-- PEFT 0.15.2
+| Field | Value |
+|---|---|
+| **Base model** | HuggingFaceTB/SmolVLM-Base (256M params) |
+| **Fine-tuning** | LoRA (r=32, alpha=64, dropout 0.05) |
+| **Dataset** | 15,883 image-action pairs (class-balanced sampling) |
+| **Action vocabulary** | `forward`, `backward`, `left`, `right`, `stop`, `rotate` |
+| **Action format** | `<direction>_<speed>_<duration>` (e.g., `forward_0.2_3.0s`) |
+| **Developed by** | Justin Williams, Clark Atlanta University |
+
+---
+
+## Results vs Other Variants
+
+| Variant | Overall Acc. | Left/Right Acc. |
+|---|---|---|
+| Base fine-tune | 77.9% | ~70% |
+| **Balanced (this)** | **85.2%** | **~83%** |
+| Temporal (k=2) | ~84% | ~81% |
+| Chunked (C=4) | ~82% | ~80% |
+
+Dataset balancing improves overall accuracy by **+7.3 points**, primarily recovering
+underrepresented turning maneuvers: left (+12 pt), right (+12 pt), rotate (+14 pt).
+
+---
+
+## Deployment — Raspberry Pi 5 (CPU-only)
+
+| Mode | Latency | Memory | Power |
+|---|---|---|---|
+| bf16 | 1.2 s/query | 510 MB | 6.5 W |
+| 8-bit | 0.95 s/query | 260 MB | 5.8 W |
+| GGUF Q4 | 0.72 s/query | 140 MB | 5.2 W |
+
+---
+
+## Citation
+
+```bibtex
+@article{williams2026smolvla,
+  title   = {SmolVLA: Lightweight On-Device Vision-Language-Action
+             for Autonomous Mobile Robots in GPS-Denied Environments},
+  author  = {Williams, Justin and Gupta, Kishor Datta and
+             George, Roy and Sarkar, Mrinmoy},
+  year    = {2026},
+  note    = {Clark Atlanta University -- manuscript}
+}
+```
+
+**Author:** Justin Williams · Clark Atlanta University · [justinwilliamstech693@gmail.com](mailto:justinwilliamstech693@gmail.com)

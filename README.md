@@ -1,219 +1,119 @@
+# Offline Autonomy — Research Portfolio
 
-# 🤖 SmolVLA: Edge-Deployed Vision-Language-Action System
-
-SmolVLA (Small Vision-Language-Action) is a lightweight **Edge AI framework** that enables mobile robots to **see, reason, and act** directly from visual input — entirely **on-device**.  
-It fine-tunes a small Vision-Language Model (VLM) on paired RGB images and ROS action data, allowing the robot to map **visual scenes → structured motion commands** (e.g., `forward_0.2_3.0s`).
-
-This project demonstrates one of the first **embedded VLA systems** capable of performing **real-time multimodal reasoning** and **autonomous mobility** on resource-constrained hardware such as the **Raspberry Pi 5** or **TurtleBot 4**.
+**Justin Williams** · Ph.D. Candidate, Cyber-Physical Systems · Clark Atlanta University  
+Supported by the **Air Force Research Laboratory (AFRL)** and the **Griffiss Institute**  
+Advisor: Dr. Kishor Datta Gupta
 
 ---
 
-## 🧠 Key Features
-- **On-Device Reasoning:** Runs entirely on embedded hardware — no GPU or cloud connection required.  
-- **Vision-to-Action Mapping:** Fine-tunes a small VLM to translate camera frames directly into robot commands.  
-- **ROS 2 Integration:** Fully compatible with ROS 2 topics for motion control and telemetry feedback.  
-- **LoRA Fine-Tuning:** Uses efficient LoRA adapters for rapid task adaptation with minimal trainable parameters.  
-- **Edge AI Optimization:** Supports quantized GGUF or 8-bit/4-bit models for real-time inference on CPUs.  
+This repository collects three independent research threads, each with a companion paper.
+All systems share a common theme: **on-device, offline-capable AI for autonomous robots**
+operating in GPS-denied or communication-contested environments.
 
 ---
 
-## 🏗️ System Overview
+## Research Projects
 
-```text
-+---------------------------+
-|     Camera (RGB Input)    |
-+------------+--------------+
-             |
-             v
-+---------------------------+
-|   SmolVLA (VLM Inference) |
-|  Image → Text → Action    |
-+------------+--------------+
-             |
-             v
-+---------------------------+
-|   ROS 2 Node Integration  |
-|   Publishes /cmd_vel etc. |
-+---------------------------+
-             |
-             v
-+---------------------------+
-|    TurtleBot / CoDrone    |
-|   Executes Motion Command |
-+---------------------------+
-````
+### 1. SmolVLA — Lightweight On-Device VLA for Mobile Robots
+**Paper:** [`papers/paper_smolvla.tex`](papers/paper_smolvla.tex)
 
----
+Fine-tunes **SmolVLM-Base (256M params)** with LoRA on 15,883 teleoperated TurtleBot 4 demonstrations to produce a robot policy that runs at **1.2 s/query on a Raspberry Pi 5 at 6.5 W** — no GPU, no cloud.
 
-## 🧩 Architecture
+| Variant | Description | Checkpoint |
+|---|---|---|
+| Base fine-tune | Initial LoRA fine-tune | `smolvlm_turtlebot_action_ft/` |
+| VLA | VLA-framed prompt format | `smolvlm_turtlebot_vla/` |
+| Temporal | $k$-frame history input | `smolvlm_turtlebot_vla_temporal/` |
+| Chunked | Predict $C$ actions per query | `smolvlm_turtlebot_vla_chunked/` |
+| Balanced | Class-balanced dataset | `smolvlm_turtlebot_action_balanced/` |
 
-| Component               | Description                                    |
-| ----------------------- | ---------------------------------------------- |
-| **Model Backbone**      | SmolVLM-Base (small multimodal transformer)    |
-| **Fine-Tuning Method**  | LoRA (Low-Rank Adaptation)                     |
-| **Dataset**             | Paired RGB frames and ROS action JSON metadata |
-| **Frameworks**          | PyTorch, Hugging Face Transformers, PEFT       |
-| **Hardware**            | Raspberry Pi 5 / TurtleBot 4                   |
-| **Runtime Environment** | Python 3.10+, ROS 2 Humble or newer            |
-
----
-
-## 🚀 Quick Start
-
-### 1. Clone the Repository
-
-```bash
-git clone https://github.com/yourusername/SmolVLA.git
-cd SmolVLA
-```
-
-### 2. Install Dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-### 3. Prepare Dataset
-
-Ensure you have paired RGB images and their corresponding JSON metadata:
-
-```
-captured_frames/
-├── frame_000001_20250822_171811_098.jpg
-├── frame_000001_20250822_171811_098.json
-├── frame_000002_20250822_171813_730.jpg
-├── frame_000002_20250822_171813_730.json
-└── ...
-```
-
-Each JSON file should include:
-
-```json
-{
-    "frame_number": 8,
-    "timestamp": "20250822_182052_781",
-    "robot_status": "idle",
-    "robot_action": "forward_0.2_3.0s",
-    "filename": "captured_frames/frame_000008_20250822_182052_781.jpg"
-}
-```
-
----
-
-### 4. Fine-Tune the Model
-
-Run the training script to fine-tune SmolVLM on your dataset:
-
-```bash
-python fine_tune_robot_actions.py
-```
-
-The model will be saved under:
-
-```
-./smolvlm_turtlebot_action_ft/
-```
-
----
-
-### 5. Test Inference
-
-```bash
-python infer_smolvla.py
-```
-
-Example output:
-
-```
-Predicted: Assistant: forward_0.2_3.0s
-From image: frame_000008_20250822_182052_781.jpg
-```
-
----
-
-### 6. OpenVLA 7B Proof of Concept
-
-This repository also includes a Proof of Concept (POC) for fine-tuning the full **OpenVLA-7B** model using LoRA adapters on the Bridge dataset.
-
-To run the fine-tuning POC:
-```bash
-python openvla_poc.py
-```
-
-To evaluate the fine-tuned model frame-by-frame on a full trajectory:
-```bash
-python test_finetune_openvla.py
-```
-
----
-
-## ⚙️ ROS 2 Integration
-
-SmolVLA integrates directly into ROS 2 through publishers and subscribers:
-
-| Topic               | Type                | Description                |
-| ------------------- | ------------------- | -------------------------- |
-| `/camera/image_raw` | sensor_msgs/Image   | Incoming RGB frames        |
-| `/smolvla/cmd`      | std_msgs/String     | Predicted action command   |
-| `/cmd_vel`          | geometry_msgs/Twist | Robot motion control topic |
-
-You can adapt the inference node to automatically publish commands:
-
-```bash
-ros2 run smolvla smolvla_node.py
-```
-
----
-
-## 📊 Experimental Summary
-
-| Metric             |                                              Value |
-| ------------------ | -------------------------------------------------: |
-| Dataset Size       |                          15,883 image–action pairs |
-| Model Size         |                    ~256M parameters (SmolVLM Base) |
-| Fine-Tune Duration |                                         ~10 epochs |
-| Hardware           | NVIDIA GPU (training), Raspberry Pi 5 (deployment) |
-| Inference Latency  |                            ~1.2s/frame on RPi5 CPU |
-| Power Draw         |                                      ~6.5W average |
-
----
-
-## 🧩 Applications
-
-* Mobile robots in GPS-denied environments
-* Defense and search-and-rescue robotics
-* Educational AI robotics research
-* Embedded autonomous systems
-
----
-
-## 📘 Citation
-
-If you use SmolVLA or reference this work, please cite:
+**Key result:** Dataset balancing improves overall action accuracy from 77.9% → 85.2%; action chunking at $C=4$ reduces query rate 4×.
 
 ```bibtex
-@article{williams2025smolvla,
-  title={SmolVLA: A Lightweight On-Device Vision-Language-Action Prototype for Autonomous Robots},
-  author={Williams, Justin},
-  year={2025},
-  journal={IEEE Edge AI Systems (submitted)}
+@article{williams2026smolvla,
+  title   = {SmolVLA: Lightweight On-Device Vision-Language-Action for Autonomous Mobile Robots in GPS-Denied Environments},
+  author  = {Williams, Justin and Gupta, Kishor Datta and George, Roy and Sarkar, Mrinmoy},
+  year    = {2026},
+  note    = {Clark Atlanta University — manuscript}
 }
 ```
 
 ---
 
-## 🧑‍💻 Author
+### 2. Satellite Captioning — Offline VLM for ISR
+**Paper:** [`papers/paper_satellite.tex`](papers/paper_satellite.tex)
 
-**Justin Williams**
-Ph.D. Candidate in Cyber-Physical Systems, Clark Atlanta University
-[LinkedIn](https://www.linkedin.com/in/justin-williams-a35581138/) | [Website](https://yourwebsite.com)
+Fine-tunes **SmolVLM-Base** with LoRA on 9,828 geo-referenced satellite images for natural-language scene description, entirely offline at < 512 MB RAM.
+
+| Metric | Zero-shot | Fine-tuned |
+|---|---|---|
+| BLEU-4 | 4.8 | **18.6** |
+| CIDEr | 22.3 | **89.4** |
+| Memory | 510 MB | 140 MB (Q4) |
+| Latency | — | 1.8 s/image (RPi5 CPU) |
+
+```bibtex
+@article{williams2026satellite,
+  title   = {Offline Satellite Image Captioning for Contested ISR: Fine-Tuning SmolVLM on Multi-Reference Aerial Imagery},
+  author  = {Williams, Justin and Gupta, Kishor Datta and George, Roy and Sarkar, Mrinmoy},
+  year    = {2026},
+  note    = {Clark Atlanta University — manuscript}
+}
+```
 
 ---
 
-## 🪶 Acknowledgments
+### 3. OpenVLA-OFT Quantization — Edge VLA for Manipulation
+**Paper:** [`openvla_oft_pipeline/papers/paper_combined.tex`](openvla_oft_pipeline/papers/paper_combined.tex)  
+**Also:** separate papers on activations (`paper1_`), transform zoo (`paper2_`), reachability (`paper3_`).
 
-Supported by the **Air Force Research Laboratory (AFRL)** and the **Griffiss Institute**.
-Special thanks to **Dr. Gupta** for advisory support and research mentorship.
+Post-training quantization of an **OpenVLA-OFT policy** (Llama-2-7B + DINOv2+SigLIP) fine-tuned on LIBERO manipulation benchmarks. Core finding: the quantization bottleneck is **activation outliers, not weights** — a single orthogonal DCT rotation enables W4A4 at 98–100% task retention.
+
+| Config | Success | Size | Reduction |
+|---|---|---|---|
+| bf16 baseline (A100) | 88.0% | 15.4 GB | — |
+| Vision-INT8 + DCT-W3A8 + Head-INT8 (A100) | **89.5%** | **4.0 GB** | **74%** |
+| W4A4+DCT **on real Jetson Orin** | **86.0%** | ~4.1 GB | ~73% |
+
+**Real-hardware confirmed:** W4A4+DCT runs on Jetson AGX Orin at 86.0% (−2.2 pt vs A100 bf16, within ±4% CI — statistically indistinguishable). First closed-loop confirmation of a quantized L1-regression VLA on edge compute.
+
+```bibtex
+@article{williams2026quant,
+  title   = {Activations, Not Weights: Orthogonal Preconditioning for Low-Bit Quantization of Vision-Language-Action Policies},
+  author  = {Williams, Justin and Gupta, Kishor Datta and George, Roy and Sarkar, Mrinmoy},
+  year    = {2026},
+  note    = {Clark Atlanta University — manuscript}
+}
+```
 
 ---
 
+## Repository Structure
+
+```
+offline-robotcs/
+├── papers/                              # Papers 1 & 2
+│   ├── paper_smolvla.tex
+│   └── paper_satellite.tex
+├── smolvlm_turtlebot_action_ft/        # SmolVLA: base fine-tune
+├── smolvlm_turtlebot_vla/              # SmolVLA: VLA framing
+├── smolvlm_turtlebot_vla_temporal/     # SmolVLA: temporal context
+├── smolvlm_turtlebot_vla_chunked/      # SmolVLA: action chunking
+├── smolvlm_turtlebot_action_balanced/  # SmolVLA: balanced dataset
+├── smolvlm_satellite_captioning/       # Satellite captioning model
+└── openvla_oft_pipeline/               # OpenVLA-OFT quantization
+    └── papers/                         # Papers 3a–3d
+        ├── paper_combined.tex
+        ├── paper1_activations_not_weights.tex
+        ├── paper2_transform_zoo_benchmark.tex
+        └── paper3_reachability_short.tex
+```
+
+---
+
+## Author
+
+**Justin Williams**  
+Ph.D. Candidate, Cyber-Physical Systems  
+Clark Atlanta University  
+[justinwilliamstech693@gmail.com](mailto:justinwilliamstech693@gmail.com)

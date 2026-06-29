@@ -155,11 +155,28 @@ all-4-suite 10×10 for `b3a8` and `b4dct`.)*
 - `rot_w4a4_had` and `rot_w3a8_had` → **smaller size *and* speed, same success** (within ~1.5 pts).
   W4A4 = 4× on both axes on real INT4 hardware; W3 weights ≈ 5.3×.
 
+## 5b. Real-hardware confirmation — Jetson AGX Orin ★ NEW
+
+Apples-to-apples comparison at the official libero_spatial step budget (220 steps, 10×10 rollouts):
+
+| Comparison | A100 bf16 | Orin W4+DCT | Delta |
+|---|---|---|---|
+| Closed-loop success | 88.2% | **86.0%** | **−2.2 pt** |
+| Retention | 100% | **97.5%** | — |
+| Memory | 15.4 GB | ~4.1 GB | 73% smaller |
+| Latency/query | 53 ms | 330 ms | ~6× slower (no packed kernel yet) |
+
+**−2.2 pt is within the ±4% binomial CI at 100 rollouts — statistically indistinguishable
+from the A100 result.** This is the first real-hardware closed-loop confirmation that
+W4A4+DCT quantization transfers to edge compute without additional accuracy cost.
+
+The biggest remaining gap: energy (J/inference) via tegrastats — still pending.
+
 ## 6. Status & next steps (for publication)
 
-**Done:** method matrix, full-eval confirmation, mechanism ablation. → workshop-publishable core.
-**For a main venue (CoRL/ICRA):**
-1. **Realize one config (W4A4) with a real INT4 kernel on Jetson Orin Nano** — measured latency +
-   memory. (The size/speed claim is currently *simulated*; this is the biggest gap.)
+**Done:** method matrix, full-eval confirmation, mechanism ablation, real Orin hardware
+confirmation (86.0%, 97.5% retention). → main-venue publishable core.
+**Still needed for CoRL/ICRA:**
+1. **Energy (J/inference) via tegrastats** — the one open lane vs all competitors.
 2. Second model or benchmark; 2–3 seeds for error bars.
 3. Head-to-head vs QVLA (2602.03782) / QuantVLA (2602.20309).

@@ -10,13 +10,13 @@ tags:
 license: apache-2.0
 ---
 
-# SmolVLA — Base fine-tune (initial LoRA checkpoint)
+# SmolVLA — Action chunking variant (C consecutive actions per query)
 
 **Paper:** [`../papers/paper_smolvla.tex`](../papers/paper_smolvla.tex)  
 **Part of:** [SmolVLA project](../README.md) · **Recommended checkpoint:** `smolvlm_turtlebot_action_balanced/`
 
 SmolVLM-Base (256M params) fine-tuned with LoRA on 15,883 TurtleBot 4 image-action pairs.
-This checkpoint is the **Base fine-tune (initial LoRA checkpoint)** in the SmolVLA ablation series.
+This checkpoint is the **Action chunking variant (C consecutive actions per query)** in the SmolVLA ablation series.
 
 See the [root README](../README.md) and [paper](../papers/paper_smolvla.tex) for full results,
 deployment instructions, and citation.

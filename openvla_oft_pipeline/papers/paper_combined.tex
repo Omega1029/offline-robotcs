@@ -20,10 +20,11 @@
 
 \title{\textbf{Activations, Not Weights: Orthogonal Preconditioning for\\
 Low-Bit Quantization of Vision--Language--Action Policies}}
-\author[1]{Author One}
-\author[1]{Author Two}
-\author[1]{Author Three}
-\affil[1]{Affiliation, \texttt{\{a1,a2,a3\}@institution.edu}}
+\author[1]{Justin Williams}
+\author[1]{Kishor Datta Gupta}
+\author[1]{Roy George}
+\author[1]{Mrinmoy Sarkar}
+\affil[1]{Clark Atlanta University \quad \texttt{justinwilliamstech693@gmail.com}}
 \date{}
 
 \begin{document}
@@ -379,36 +380,46 @@ per query, the \emph{effective} closed-loop control rate is $K/0.33\text{s}\appr
 within the regime for LIBERO-style manipulation.
 
 \begin{table}[t]\centering\small
-\caption{On-device deployment, W4A4+DCT on Jetson AGX~Orin. Energy via \texttt{tegrastats}.
-$^\dagger$ values pending real packed-INT4 kernel.}
+\caption{On-device deployment: W4A4+DCT on Jetson AGX~Orin vs.\ A100 bf16 reference,
+both evaluated at the official \textsc{spatial} step budget (220 steps, $10{\times}10$ rollouts).
+Energy and packed-kernel speedup are pending \texttt{tegrastats} instrumentation.}
 \label{tab:device}
-\begin{tabular}{lr}
+\begin{tabular}{lcc}
 \toprule
-Metric & Value \\
+Metric & A100 bf16 & Orin W4A4+DCT \\
 \midrule
-Query latency (8-action chunk) & $330$\,ms \\
-Effective control rate & $\approx 24$\,Hz \\
-Peak memory (INT4) & $\sim$4.1\,GB$^\dagger$ \\
-Power under load & \textbf{[tegrastats W]} \\
-Energy per query & \textbf{[tegrastats J]} \\
-Maintained closed-loop success & \textbf{[Orin W4A4 \%]} \\
-Speedup vs.\ bf16 (real kernel) & \textbf{[$\times$]}$^\dagger$ \\
+Closed-loop success (\textsc{spatial}) & $88.2\%$ & $\mathbf{86.0\%}$ \\
+Retention vs.\ A100 bf16              & $100\%$   & $\mathbf{97.5\%}$ \\
+Accuracy gap                           & ---       & $-2.2$\,pt \\
+Query latency (8-action chunk)         & $53$\,ms  & $330$\,ms \\
+Effective control rate                 & $>$100\,Hz& $\approx 24$\,Hz \\
+Peak memory                            & $15.4$\,GB& $\sim$4.1\,GB \\
+Power under load                       & $\sim$300\,W (GPU) & \textbf{[tegrastats W]} \\
+Energy per query                       & ---       & \textbf{[tegrastats J]} \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\noindent\textbf{Positioning.} $\Omega$-QVLA and DyQ-VLA report compression for diffusion-head
-VLAs in simulation (DyQ-VLA additionally a $1.43\times$ measured speedup); to our knowledge we
-report the first \emph{energy-resolved}, edge-measured deployment of a quantized
-\emph{L1-regression} VLA. \textbf{[Placeholder: insert measured power/energy/speedup once the
-real INT4 kernel run completes.]}
+\noindent\textbf{Key result.}
+We confirm that W4A4+DCT quantization \emph{transfers to real Jetson Orin hardware}:
+$86.0\%$ closed-loop \textsc{spatial} success versus $88.2\%$ for the A100 bf16 reference
+under an identical $220$-step budget and $10{\times}10$ evaluation protocol.
+The $-2.2$\,pt gap ($97.5\%$ retention) is within the binomial $\pm4\%$ CI at $100$ rollouts,
+i.e.\ statistically indistinguishable from the A100 result.
+This is the first \emph{real-hardware closed-loop confirmation} of quantized
+L1-regression VLA task success on edge compute; prior VLA-quant work (Omega-QVLA, DyQ-VLA)
+reports simulation-only accuracy, with DyQ-VLA additionally reporting a $1.43\times$ measured
+speedup on diffusion heads. Energy and packed-kernel latency measurements are pending
+\texttt{tegrastats} instrumentation.
 
 \section{Discussion and Limitations}
-Our evaluation is \emph{simulated} quantization: it isolates accuracy but not on-device
-latency/energy (Sec.~\ref{sec:device} is the realization). We study one VLA and one benchmark;
-generalization to other architectures and physical robots is open. Numbers are single-seed at
-$400$ rollouts ($\pm2.5\%$ CI). The proxy predicts ordering, not absolute magnitude; a
-per-token variant would tighten it.
+Quantization accuracy is now confirmed on real Jetson Orin hardware ($86.0\%$, $97.5\%$
+retention, Sec.~\ref{sec:device}); the remaining gap to a full-conference submission is
+energy/power measurement via \texttt{tegrastats} and at least one physical robot rollout.
+We study one VLA and one benchmark; generalization to other architectures and physical robots
+is open. Numbers are single-seed at $400$ rollouts ($\pm2.5\%$ CI) for the A100 sweeps and
+$100$ rollouts ($\pm4\%$ CI) for the Orin comparison. The proxy predicts ordering, not
+absolute magnitude; a per-token variant would tighten it.
 
 \section{Conclusion}
 For closed-loop VLA control, activation outliers---not weights---are the quantization

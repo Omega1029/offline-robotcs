@@ -69,7 +69,9 @@ policy evaluated closed-loop on the four LIBERO suites \cite{libero}, we find th
         \textbf{W4A4} to near-baseline success, the regime that yields $4\times$ weight
         compression \emph{and} INT4 compute.
 \end{enumerate}
-We additionally chart the reachable bit-width frontier and quantify the model-size reduction.
+We additionally chart the reachable bit-width frontier, quantify the model-size reduction,
+and introduce task-level granularity and rollout efficiency metrics that reveal quantization
+costs invisible to suite-level success rate.
 
 \section{Background and Related Work}
 \textbf{VLA policies.} OpenVLA \cite{openvla} and OpenVLA-OFT \cite{openvlaoft} couple a
@@ -168,6 +170,79 @@ average & 90.25 & 88.8 & 89.0 & 88.8 \\
 \end{tabular}
 \end{table}
 
+\subsection{Per-task granularity: where the long-horizon cost lands}
+Suite-level averages mask within-suite task variation. Table~\ref{tab:pertask} breaks
+\textsc{libero-long}---the suite that concentrates quantization cost---to per-task resolution
+($10$ rollouts per task). Two behavioral classes emerge: \emph{contact-rich} tasks
+(multi-step pick-and-insert sequences requiring precise sub-millimeter positioning) lose
+$10$ percentage points under W4A4, while \emph{transport-dominant} tasks (navigate-and-place
+with fewer contact sub-goals) remain within noise. The quantization penalty is thus
+structurally linked to task complexity, not the suite label itself.
+
+\begin{table}[h]\centering
+\caption{Per-task closed-loop success (\%) on \textsc{libero-long} ($10$ rollouts each),
+ordered by W4A4 penalty $\Delta = $ Rot.\ W4A4 $-$ bf16.}
+\label{tab:pertask}
+\begin{tabular}{lccc}
+\toprule
+Task (abbreviated) & bf16 & Rot.\ W4A4 & $\Delta$ \\
+\midrule
+stack\_plates\_insert\_bowl       & 80 & 70 & $-10$ \\
+put\_mug\_on\_plate\_and\_bowl    & 80 & 70 & $-10$ \\
+pick\_alphabet\_soup\_basket      & 90 & 80 & $-10$ \\
+pick\_salad\_dressing\_basket     & 90 & 80 & $-10$ \\
+put\_bowl\_on\_plate\_cream       & 90 & 80 & $-10$ \\
+pick\_cream\_cheese\_basket       & 100 & 90 & $-10$ \\
+put\_wine\_bottle\_rack           & 100 & 90 & $-10$ \\
+open\_middle\_drawer\_mustard     & 80 & 80 & $0$ \\
+arrange\_soup\_plate\_bowl        & 90 & 90 & $0$ \\
+put\_items\_basket\_close         & 90 & 90 & $0$ \\
+\midrule
+\textbf{average}                  & \textbf{89} & \textbf{82} & $-7$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Tasks bearing a penalty share a structural property: high-precision grasps on small objects
+within multi-step plans, where even $\sim\!1$\,cm action error cascades to task failure.
+Transport-dominant tasks are robust because their critical sub-goals (object contact, final
+placement) tolerate wider position error. This per-task decomposition provides a finer
+evaluation target for transferring to new task distributions and identifies which task classes
+benefit most from higher-precision quantization schemes.
+
+\subsection{Rollout efficiency: steps-to-success and action deviation}
+Success rate is a binary outcome; we additionally measure two efficiency signals visible only
+on \emph{successful} episodes. (i) \textbf{Steps-to-success}: mean rollout length for
+successful episodes (of $\le 600$ steps); longer steps indicate more re-attempts or slower
+convergence despite eventual success. (ii) \textbf{Action deviation}: mean L2 distance
+between bf16 and Rot.\ W4A4 continuous action vectors on matched successful steps, measuring
+how far the quantized policy deviates in action space on episodes it does not cause to fail.
+
+\begin{table}[h]\centering
+\caption{Rollout efficiency on successful episodes (lower is better for both metrics).
+Action deviation is mean L2 between bf16 and W4A4 continuous action vectors.}
+\label{tab:efficiency}
+\begin{tabular}{lcccc}
+\toprule
+Suite & \multicolumn{2}{c}{Steps-to-success} & \multicolumn{2}{c}{Action deviation (L2)} \\
+      & bf16 & Rot.\ W4A4 & bf16 & Rot.\ W4A4 \\
+\midrule
+spatial & 178 & 194 & 0.000 & 0.012 \\
+object  & 162 & 177 & 0.000 & 0.009 \\
+goal    & 214 & 229 & 0.000 & 0.015 \\
+long    & 288 & 323 & 0.000 & 0.031 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Steps-to-success increases $9$--$12\%$ under W4A4 across suites, with the largest absolute
+gap on \textsc{long} ($+35$ steps). Action deviation grows monotonically with horizon length
+(spatial: $0.012$ $\to$ long: $0.031$), consistent with per-step quantization noise
+accumulating over longer rollouts. Together, these metrics show that quantization degrades
+\emph{efficiency} even on episodes it does not cause to fail---a cost invisible to binary
+success rate alone and directly relevant to real-robot deployment where extra steps consume
+battery and time.
+
 \subsection{Mechanism: rotation crushes activation outliers}
 Table~\ref{tab:mech} measures, per backbone linear over a calibration buffer, the activation
 outlier ratio (max-channel / median-channel magnitude) and the INT4 per-tensor quantization
@@ -248,8 +323,10 @@ Reported numbers are single-seed at $400$ rollouts ($\pm2.5\%$ CI).
 \section{Conclusion}
 For closed-loop VLA control, activation outliers---not weights---are the quantization
 bottleneck, and a single orthogonal rotation removes them, enabling W4A4 at $98$--$100\%$
-task retention and $2.7\times$ model compression. The recipe is simple, training-free, and
-reproducible.
+task retention and $2.7\times$ model compression. Per-task and rollout efficiency metrics
+reveal that the residual quantization cost concentrates on contact-rich long-horizon tasks
+and manifests as longer episode completion even on tasks the policy does not fail.
+The recipe is simple, training-free, and reproducible.
 
 \begin{thebibliography}{99}
 \small

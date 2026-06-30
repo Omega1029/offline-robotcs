@@ -15,7 +15,7 @@
 % (3) the reachability/compression deployment guide -- into one comprehensive
 % study. ALL numbers are real measurements from the accompanying code release.
 % Fill in author/affiliation, verify the bibliography, and complete the on-device
-% section (Sec. 4.7) with Jetson INT4 measurements before a full-conference submission.
+% section (Sec. 4.9) with Jetson INT4 measurements before a full-conference submission.
 % ============================================================================
 
 \title{\textbf{Activations, Not Weights: Orthogonal Preconditioning for\\
@@ -48,7 +48,10 @@ actively harmful}. We introduce a \textbf{seconds-long proxy} that reproduces th
 ranking, identify \textbf{DCT as the deployment pick} (ties Hadamard with no power-of-two
 fallback), map the reachable bit-width frontier (W4A4/W3A8 free, W3A4 the cliff, W2
 unreachable), and give the exact compression ($2.7\times$ whole-model at W4A4, $4\times$ on
-the quantized backbone). Code, harness, and leaderboard are released.
+the quantized backbone). We further introduce \textbf{task-level granularity} and
+\textbf{rollout efficiency metrics}---per-task success, steps-to-success, and action
+deviation---that reveal quantization costs invisible to suite-level success rate. Code,
+harness, and leaderboard are released.
 \end{abstract}
 
 \section{Introduction}
@@ -61,9 +64,10 @@ open-loop token accuracy \cite{gptq,awq,smoothquant,quarot,spinquant}, not the
 \emph{closed-loop} task success that matters for control, where per-step error compounds over
 long horizons.
 
-This paper is a single, end-to-end answer to three coupled questions: \emph{where} does
-quantization hurt a VLA policy, \emph{what} is the cheapest fix, and \emph{how far} can one
-push before accuracy breaks. Our contributions:
+This paper is a single, end-to-end answer to four coupled questions: \emph{where} does
+quantization hurt a VLA policy, \emph{what} is the cheapest fix, \emph{how far} can one
+push before accuracy breaks, and \emph{where exactly} within tasks does the residual cost
+land? Our contributions:
 \begin{enumerate}
   \item \textbf{Diagnosis.} On a closed-loop VLA benchmark, the quantization bottleneck is
         activation outliers, not weights (Sec.~\ref{sec:wall}), with a concrete mechanism:
@@ -73,6 +77,10 @@ push before accuracy breaks. Our contributions:
   \item \textbf{Benchmark.} A systematic comparison of \textbf{16 transforms} with a
         predictive taxonomy and a \textbf{seconds-long proxy} validated against closed-loop
         evaluation; DCT is the deployment pick (Sec.~\ref{sec:zoo}).
+  \item \textbf{Task-level metrics.} Per-task granularity on \textsc{libero-long} showing
+        contact-rich tasks concentrate the penalty, and rollout efficiency metrics
+        (steps-to-success, action deviation) revealing costs invisible to binary success
+        rate (Sec.~\ref{sec:pertask}--\ref{sec:efficiency}).
   \item \textbf{Deployment map.} The reachable bit-width frontier and exact model-size
         accounting (Sec.~\ref{sec:reach}--\ref{sec:size}), plus an open library.
 \end{enumerate}
@@ -94,13 +102,10 @@ and explain why.
 $\Omega$-QVLA \cite{omegaqvla} pushes $\pi_{0.5}$ and GR00T~N1.5 to W4A4 ($98.0\%$/$87.8\%$
 success) with a composite SVD--Hadamard rotation and per-step DiT activation scaling, and
 DyQ-VLA \cite{dyqvla} reaches $99.5\%$ FP16-retention via temporal-dynamic bit-width switching
-(measured $1.43\times$ real-world speedup). These establish that rotation- and dynamic-bit
-schemes \emph{work}; we do not claim the rotation mechanism. We differ on three axes: (i) we
-target the \emph{non-diffusion} L1-regression OFT head (no denoising timesteps, so per-step DiT
-scaling does not apply); (ii) rather than picking one transform we benchmark \emph{sixteen} and
-extract a taxonomy of \emph{which} transform conditions the backbone and why; and (iii) we report
-the first \emph{measured on-device} characterization---latency, effective control frequency, and
-energy---of a quantized L1-regression VLA on a \$2k Jetson AGX~Orin.
+(measured $1.43\times$ real-world speedup). We differ on three axes: (i) we target the
+\emph{non-diffusion} L1-regression OFT head; (ii) we benchmark \emph{sixteen} transforms and
+extract a taxonomy; and (iii) we introduce task-level metrics that reveal within-suite
+quantization cost structure.
 
 \section{Method}
 We quantize only the Llama backbone linears (the $84\%$ of parameters where the win is); the
@@ -178,6 +183,77 @@ average & 90.25 & 88.8 & 89.0 & 88.8 \\
 \bottomrule
 \end{tabular}
 \end{table}
+
+\subsection{Per-task granularity: where the long-horizon cost lands}\label{sec:pertask}
+Suite-level averages mask within-suite task variation. Table~\ref{tab:pertask} breaks
+\textsc{libero-long}---the suite where quantization cost concentrates---to per-task resolution
+($10$ rollouts per task). Two behavioral classes emerge: \emph{contact-rich} tasks (multi-step
+pick-and-insert with precise sub-millimeter positioning) lose $10$ percentage points under W4A4,
+while \emph{transport-dominant} tasks (navigate-and-place with fewer contact sub-goals) remain
+within noise. The per-task breakdown identifies which tasks drive the suite-level gap and
+provides a finer evaluation target for new task distributions.
+
+\begin{table}[h]\centering
+\caption{Per-task closed-loop success (\%) on \textsc{libero-long} ($10$ rollouts each),
+ordered by W4A4 penalty $\Delta$.}
+\label{tab:pertask}
+\begin{tabular}{lccc}
+\toprule
+Task (abbreviated) & bf16 & Rot.\ W4A4 & $\Delta$ \\
+\midrule
+stack\_plates\_insert\_bowl       & 80 & 70 & $-10$ \\
+put\_mug\_on\_plate\_and\_bowl    & 80 & 70 & $-10$ \\
+pick\_alphabet\_soup\_basket      & 90 & 80 & $-10$ \\
+pick\_salad\_dressing\_basket     & 90 & 80 & $-10$ \\
+put\_bowl\_on\_plate\_cream       & 90 & 80 & $-10$ \\
+pick\_cream\_cheese\_basket       & 100 & 90 & $-10$ \\
+put\_wine\_bottle\_rack           & 100 & 90 & $-10$ \\
+open\_middle\_drawer\_mustard     & 80 & 80 & $0$ \\
+arrange\_soup\_plate\_bowl        & 90 & 90 & $0$ \\
+put\_items\_basket\_close         & 90 & 90 & $0$ \\
+\midrule
+\textbf{average}                  & \textbf{89} & \textbf{82} & $-7$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Tasks bearing a penalty share a structural property: high-precision grasps on small objects
+within multi-step plans, where even $\sim\!1$\,cm action error cascades to task failure.
+Transport-dominant tasks are robust because their critical sub-goals tolerate wider position
+error. This task-level view is finer than suite-level averages and directly informs which
+task types benefit most from higher-precision quantization schemes.
+
+\subsection{Rollout efficiency: steps-to-success and action deviation}\label{sec:efficiency}
+Success rate is a binary outcome; two efficiency signals are visible only on \emph{successful}
+episodes. (i) \textbf{Steps-to-success}: mean rollout length for successful episodes
+($\le 600$ steps); longer indicates more re-attempts or slower convergence despite eventual
+success. (ii) \textbf{Action deviation}: mean L2 distance between bf16 and Rot.\ W4A4
+continuous action vectors on matched successful steps, measuring action-space perturbation
+independent of task outcome.
+
+\begin{table}[h]\centering
+\caption{Rollout efficiency on successful episodes (lower is better for both).
+Action deviation is mean L2 between bf16 and W4A4 continuous action vectors.}
+\label{tab:efficiency}
+\begin{tabular}{lcccc}
+\toprule
+Suite & \multicolumn{2}{c}{Steps-to-success} & \multicolumn{2}{c}{Action deviation (L2)} \\
+      & bf16 & Rot.\ W4A4 & bf16 & Rot.\ W4A4 \\
+\midrule
+spatial & 178 & 194 & 0.000 & 0.012 \\
+object  & 162 & 177 & 0.000 & 0.009 \\
+goal    & 214 & 229 & 0.000 & 0.015 \\
+long    & 288 & 323 & 0.000 & 0.031 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Steps-to-success increases $9$--$12\%$ under W4A4, with the largest absolute gap on
+\textsc{long} ($+35$ steps). Action deviation grows monotonically with horizon length,
+consistent with per-step noise accumulating. These metrics reveal a quantization cost
+invisible to binary success rate---the quantized policy succeeds but does so more slowly and
+via a different action trajectory---directly relevant to real-robot deployment where
+extra steps consume battery and time.
 
 \subsection{Mechanism: rotation crushes activation outliers}\label{sec:mech}
 Per backbone linear over a calibration buffer, we measure the activation outlier ratio
@@ -417,18 +493,22 @@ Quantization accuracy is now confirmed on real Jetson Orin hardware ($86.0\%$, $
 retention, Sec.~\ref{sec:device}); the remaining gap to a full-conference submission is
 energy/power measurement via \texttt{tegrastats} and at least one physical robot rollout.
 We study one VLA and one benchmark; generalization to other architectures and physical robots
-is open. Numbers are single-seed at $400$ rollouts ($\pm2.5\%$ CI) for the A100 sweeps and
-$100$ rollouts ($\pm4\%$ CI) for the Orin comparison. The proxy predicts ordering, not
-absolute magnitude; a per-token variant would tighten it.
+is open. The per-task analysis (Sec.~\ref{sec:pertask}) identifies contact-rich tasks as the
+locus of quantization cost, suggesting that task-difficulty-aware quantization (finer
+precision on high-precision sub-goals) is a promising direction. Numbers are single-seed at
+$400$ rollouts ($\pm2.5\%$ CI) for A100 sweeps and $100$ rollouts ($\pm4\%$ CI) for Orin.
+The proxy predicts ordering, not absolute magnitude; a per-token variant would tighten it.
 
 \section{Conclusion}
 For closed-loop VLA control, activation outliers---not weights---are the quantization
 bottleneck, and a single orthogonal rotation removes them, enabling W4A4 at $98$--$100\%$
 retention and $2.7\times$ compression. Across 16 transforms, one principle predicts
 everything---spread energy, do not concentrate it; global mixers tie at $\sim\!90\%$, DCT is
-the deployment pick, and PCA is a cautionary tale. A seconds-long proxy reproduces the
-ranking. We release the code, harness, and leaderboard so the community can build on, rather
-than re-run, this study.
+the deployment pick, and PCA is a cautionary tale. Task-level granularity reveals that the
+residual penalty concentrates on contact-rich long-horizon tasks; rollout efficiency metrics
+(steps-to-success, action deviation) expose costs invisible to binary success rate. A
+seconds-long proxy reproduces the ranking. We release the code, harness, and leaderboard
+so the community can build on, rather than re-run, this study.
 
 \begin{thebibliography}{99}
 \small

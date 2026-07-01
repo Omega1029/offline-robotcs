@@ -428,6 +428,15 @@ Unreachable & any W2 (incl.\ W2A8 rotated) & $0\%$ \\
 \end{tabular}
 \end{table}
 
+\paragraph{A deployment decision rule.} The frontier reduces to three operating points and a
+rule of thumb. \textbf{(1)} Default to \textbf{W4A4 + DCT}---near-lossless, $2.7\times$ smaller,
+$4\times$ activation bandwidth, any-dimension. \textbf{(2)} Need more compression and can spend
+$8$-bit activations? Use \textbf{W3A8} ($3.16\times$, and---once DCT conditions the
+activations---matching/exceeding W4A4 at smaller size, Sec.~\ref{sec:component}). \textbf{(3)} Do
+\emph{not} attempt W2: sub-2-bit weights collapse to $0\%$ regardless of preconditioning.
+\textbf{(4)} Always apply a global orthogonal rotation before activation quantization; without it,
+A4 collapses to $0\%$.
+
 \subsection{Compression}\label{sec:size}
 The checkpoint is $7.69$B parameters ($15.4$\,GB bf16); the quantized backbone is $6.48$B
 ($84\%$); the tower/heads ($1.22$B, $2.43$\,GB) stay bf16. W4A4 yields $2.7\times$ whole-model

@@ -1,0 +1,293 @@
+\documentclass[11pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+\usepackage{authblk}
+
+% ============================================================================
+% CROSS-VLA METHODS PAPER (synthesis / main-track "methods" contribution)
+% Unifies three separately-studied embodiments under one quantization principle:
+%   - OpenVLA-OFT  (manipulation, LIBERO)      -> rotation enables W4A4
+%   - OpenDriveVLA (driving, NeuroNCAP)         -> granularity governs coherence
+%   - SmolVLA      (navigation, TurtleBot4/RPi5)-> lightweight on-device policy
+% ALL numbers are the real measurements reported in the three companion studies;
+% no new experiments are introduced here -- this paper is a unifying analysis.
+% ============================================================================
+
+% >>> Target venue: ICML 2027 (main track) <<<
+\title{\textbf{One Principle, Three Embodiments: Activation Conditioning and\\
+Scale Granularity Govern Low-Bit Quantization of\\
+Vision--Language--Action Policies}}
+\author[1]{Justin Williams}
+\author[1]{Kishor Datta Gupta}
+\author[1]{Roy George}
+\author[1]{Mrinmoy Sarkar}
+\affil[1]{Clark Atlanta University \quad \texttt{justinwilliamstech693@gmail.com}}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Vision--Language--Action (VLA) policies are being compressed for on-board inference across very
+different embodiments---tabletop manipulation, autonomous driving, and mobile navigation---but the
+quantization literature treats each in isolation, re-deriving techniques per platform. We unify
+three independent closed-loop studies under a \emph{single} principle: low-bit VLA robustness is
+governed not by nominal bit-width but by \emph{how quantization-friendly the activation distribution
+is}, which is controlled by two knobs---an orthogonal \emph{incoherence rotation} that spreads
+activation energy across channels, and the \emph{scale granularity} (per-tensor / per-channel /
+group-wise) that bounds how much a residual outlier can coarsen the grid. We substantiate the
+principle with real measurements on three policies. \textbf{(Manipulation)} On OpenVLA-OFT
+(Llama-2-7B) evaluated closed-loop on LIBERO, naive W4A4 collapses to $0\%$ task success, but a
+single rotation---which cuts the median activation outlier ratio from $18.0$ to $1.6$---restores
+$88.8$--$90.5\%$ ($98$--$100\%$ retention); a $16$-transform benchmark shows any global mixer
+suffices and the DCT is the deployment pick ($89.8\%$). \textbf{(Driving)} On OpenDriveVLA-0.5B
+(Qwen2.5) evaluated closed-loop in the NeuroNCAP neural-rendering simulator, \emph{per-channel} INT4
+collapses generation coherence to $3.7\%$ under deployment-domain shift while \emph{group-wise} INT4
+(an extra $\approx0.1$ bits/weight) recovers $73.5\%$ vs.\ $76.0\%$ for FP16---the same principle,
+expressed through granularity rather than rotation. \textbf{(Navigation)} On SmolVLA (a 256M model on
+a Raspberry Pi~5), INT4 weight-only quantization runs at $0.72$\,s/query and $5.2$\,W with the policy
+usable on-device. Finally, we argue that these effects are invisible to aggregate accuracy and are
+only exposed by \emph{task-level closed-loop metrics}---generation coherence, degenerate-frame
+recovery rate, command jitter, and per-task breakdowns---which we consolidate into a portable
+evaluation protocol. The contribution is a single predictive account, and a decision procedure, that
+transfers across VLA embodiments.
+\end{abstract}
+
+\section{Introduction}
+Vision--Language--Action (VLA) models turn large vision--language backbones into robot policies that
+map pixels and a language instruction to actions \cite{openvla,openvlaoft}. Because the accurate
+backbones are large (0.5B--7B parameters), deploying them on the compute a robot can physically carry
+demands aggressive post-training quantization (PTQ). But ``a robot'' spans wildly different
+embodiments---a fixed-base manipulator, a car, a battery-powered ground robot---and the emerging VLA
+quantization literature studies each in a silo, re-deriving rotations, granularities, and bit-widths
+platform by platform. This fragmentation hides what is actually a \emph{single} underlying story.
+
+This paper makes that story explicit. We show that across three independently-conducted closed-loop
+studies---manipulation (OpenVLA-OFT on LIBERO), driving (OpenDriveVLA on NeuroNCAP), and navigation
+(SmolVLA on a TurtleBot~4 / Raspberry Pi~5)---one principle predicts when low-bit quantization
+succeeds or fails:
+\begin{quote}\itshape
+Low-bit VLA robustness is set by how quantization-friendly the activation distribution is. Make it
+friendly---by rotating energy to be near-Gaussian, and by choosing a scale granularity fine enough
+that no residual outlier dominates the grid---then take the coarsest representation that still
+survives the \emph{deployment}-domain distribution, not just the calibration distribution.
+\end{quote}
+The two ``knobs'' (rotation and granularity) are two views of the same quantity---the effective
+per-scale dynamic range the quantizer must cover---and different embodiments happen to expose
+different knobs. We further show that the effects are structurally invisible to aggregate success or
+open-loop error, and are only revealed by task-level closed-loop metrics; we distill those into a
+portable protocol.
+
+\noindent\textbf{Contributions.}
+\begin{enumerate}
+  \item \textbf{A unifying framework} (Sec.~\ref{sec:framework}) casting rotation and scale
+        granularity as two controls on the same effective-dynamic-range quantity, with a
+        \emph{deployment-domain-shift} axis that explains why calibration-time losslessness does not
+        imply deployment-time robustness.
+  \item \textbf{Cross-embodiment evidence} (Sec.~\ref{sec:evidence}) that the framework predicts the
+        real, measured outcomes on three policies spanning manipulation, driving, and navigation.
+  \item \textbf{A decision procedure} (Sec.~\ref{sec:rule}) that a practitioner can apply to a new
+        VLA/embodiment without re-running a full sweep.
+  \item \textbf{A portable task-level evaluation protocol} (Sec.~\ref{sec:eval}) consolidating
+        generation coherence, degenerate-frame recovery rate, command jitter, and per-task
+        breakdowns---the metrics that made the effects visible in the first place.
+\end{enumerate}
+No new experiments are introduced; every number below is a real measurement reported in one of the
+three companion studies. The novelty is the unification and the transferable procedure.
+
+\section{A Unified View of Low-Bit VLA Quantization}\label{sec:framework}
+\paragraph{Preconditioning.} For a linear layer $y=Wx$ we insert an invertible preconditioner $M$ on
+the input axis, $y=Wx=(WM^{-1})(Mx)$, and quantize the conditioned weight $WM^{-1}$ and activation
+$Mx$. For orthogonal $M$ the computation is exact in floating point while the quantizer now sees
+operands whose energy is spread across channels \cite{quarot,spinquant,quip}. Incoherence rotations
+(Hadamard, DCT, SRHT, \dots) are the case $M=Q$, $Q^\top Q=I$.
+
+\paragraph{Granularity is the same knob.} A quantizer with step $s=\max_{i\in g}|w_i|/(2^{b-1}{-}1)$
+over a scale-sharing group $g$ is coarsened by the single largest magnitude in $g$. Shrinking $g$
+(per-tensor $\to$ per-channel $\to$ group-128) is therefore a second way to reduce the
+\emph{effective dynamic range each scale must cover}---exactly what a rotation does by removing the
+outlier that inflated $\max|w|$ (or $\max|x|$) in the first place. Rotation attacks the numerator;
+finer granularity shrinks the set the numerator is taken over. Both reduce the same quantity.
+
+\paragraph{The deployment-domain-shift axis.} A quantizer calibrated on in-distribution data can be
+lossless there yet fail once the policy runs closed-loop on \emph{deployment} inputs (a neural
+renderer, a real camera, a new environment), because the hidden-state distribution moves off the
+calibrated regime and a marginally-coarse grid then tips greedy decoding into degenerate output. The
+correct target is robustness under this shift, not calibration-time error. This axis is what makes
+\emph{closed-loop} evaluation non-optional.
+
+\section{Evidence Across Three Embodiments}\label{sec:evidence}
+
+\subsection{Manipulation: rotation is the knob (OpenVLA-OFT, LIBERO)}
+On an OpenVLA-OFT policy (Llama-2-7B backbone, L1-regression action head; bf16 average success
+$90.25\%$ over the four LIBERO suites, $400$ rollouts), weights are easy but activations are the
+wall: naive per-channel weight quantization is near-lossless to 4 bits ($90.75\%$), yet naive W4A4
+collapses to $0\%$. A single orthogonal rotation---cutting the median activation outlier ratio from
+$18.0$ to $1.6$ and the worst from $\sim\!10^5$ to $6.2$---restores W4A4 to $88.8$--$90.5\%$
+($98$--$100\%$ retention) at $2.7\times$ whole-model compression (Table~\ref{tab:manip}). A
+benchmark of $16$ transforms shows that \emph{any} global dense mixer suffices and the choice is
+governed by a single principle---spread energy, do not concentrate it (PCA, which concentrates
+energy, is actively harmful)---with the DCT the deployment pick ($89.8\%$, $99.5\%$ retention;
+any-dimension, data-free, $O(n\log n)$).
+
+\begin{table}[h]\centering
+\caption{Manipulation (OpenVLA-OFT, LIBERO, $400$ rollouts; bf16 $=90.25\%$). Rotation is decisive.}
+\label{tab:manip}
+\begin{tabular}{lccc}
+\toprule
+Configuration & Activations & Success & Retention \\
+\midrule
+bf16 baseline & 16-bit & 90.25\% & --- \\
+Naive W4A4 & 4-bit & \textbf{0.0\%} & 0\% \\
+Rotated W4A4 (Hadamard) & 4-bit & 88.8\% & 98.4\% \\
+Rotated W4A4 (random orth.) & 4-bit & 90.5\% & 100.3\% \\
+DCT W4A4 (deployment pick) & 4-bit & 89.8\% & 99.5\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Driving: granularity is the knob (OpenDriveVLA, NeuroNCAP)}
+On OpenDriveVLA-0.5B (Qwen2.5-0.5B planner on UniAD perception), open-loop nuScenes L2 is lossless
+to INT4 ($0.33$\,m) but is structurally blind---zeroing the ego-state prompt inflates L2 to
+$6.38$\,m ($19\times$), i.e.\ the metric is $\approx$ ego-extrapolation. Closed-loop in the NeuroNCAP
+neural-rendering simulator ($14$ scenes / $16$ scenario instances, $10$ paired seeds) tells the real
+story: under the deployment-domain shift of photorealistic re-rendering, \emph{per-channel} INT4
+collapses generation coherence to $3.7\%$ (planner frozen on nearly every frame), while
+\emph{group-wise} INT4---an extra $\approx0.1$ bits/weight---recovers $73.5\%$ vs.\ $76.0\%$ for FP16
+(Table~\ref{tab:drive}). Here the \emph{same principle} is expressed through granularity: the rotation
+knob is replaced by the group-size knob, and both work by bounding how far one outlier can coarsen the
+grid under shift. Crucially, per-channel INT4 is lossless \emph{in-distribution}---the failure is a
+quantization$\,\times\,$domain-shift interaction, exactly the axis of Sec.~\ref{sec:framework}.
+
+\begin{table}[h]\centering
+\caption{Driving (OpenDriveVLA-0.5B, NeuroNCAP closed-loop, $16$ scenario instances). Generation
+coherence $=$ well-formed predicted-frame rate. Granularity is decisive.}
+\label{tab:drive}
+\begin{tabular}{lcc}
+\toprule
+Config & mean coherence & recovery rate \\
+\midrule
+FP16 & 76.0\% & --- \\
+INT4 per-channel & \textbf{3.7\%} & 12\% \\
+INT4 group-128 & \textbf{73.5\%} & 74\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Navigation: the small-model regime (SmolVLA, TurtleBot~4 / RPi~5)}
+SmolVLA fine-tunes SmolVLM-Base (256M parameters) with LoRA on $15{,}883$ teleoperated TurtleBot~4
+demonstrations and runs \emph{entirely on a Raspberry Pi~5 CPU}. At this scale the deployment story
+is dominated by the static footprint: weight-only INT4 (GGUF~Q4) runs at $0.72$\,s/query, $0.14$\,GB,
+$5.2$\,W---versus $1.2$\,s / $0.51$\,GB / $6.5$\,W at bf16 (Table~\ref{tab:nav}). The 256M model has
+no ``massive activation'' pathology at the 7B/0.5B scale, so weight-only INT4 is already usable and
+the activation-conditioning knobs are held in reserve; the binding constraint is watts and
+milliseconds, not outlier-induced collapse. This is the third point on the same axis: as the backbone
+shrinks, the effective dynamic range the quantizer must cover shrinks with it, and the coarsest safe
+representation moves toward weight-only INT4.
+
+\begin{table}[h]\centering
+\caption{Navigation (SmolVLA, 256M, Raspberry Pi~5 CPU-only). Weight-only quantization; on-device.}
+\label{tab:nav}
+\begin{tabular}{lccc}
+\toprule
+Mode & latency (s/query) & memory (GB) & power (W) \\
+\midrule
+bf16 & 1.20 & 0.51 & 6.5 \\
+INT8 & 0.95 & 0.26 & 5.8 \\
+INT4 (GGUF Q4) & \textbf{0.72} & \textbf{0.14} & \textbf{5.2} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{The Unifying Principle and a Decision Procedure}\label{sec:rule}
+The three embodiments trace one curve. As the effective per-scale dynamic range grows---driven by
+backbone size and by activation outliers---the intervention needed to reach W4A4 escalates: SmolVLA
+(256M) needs nothing beyond weight-only INT4; OpenDriveVLA (0.5B) needs finer \emph{granularity} to
+survive domain shift; OpenVLA-OFT (7B) needs a full incoherence \emph{rotation} to defeat
+$10^5\times$ activation outliers. All three are the same knob at different settings. We distill a
+procedure for a new VLA/embodiment:
+\begin{enumerate}
+  \item \textbf{Profile activations first.} Measure the per-linear activation outlier ratio on a
+        small calibration buffer. A ratio $\gtrsim 10$ predicts an activation wall (rotation needed);
+        a modest ratio predicts weight-only quantization will suffice.
+  \item \textbf{If outliers are large, rotate.} Apply a global orthogonal mixer before activation
+        quantization; default to the \textbf{DCT} (any-dimension, data-free, $O(n\log n)$, ties
+        Hadamard without a power-of-two fallback). Never quantize A4 without it---unrotated A4
+        collapses to $0\%$.
+  \item \textbf{Choose the coarsest granularity that survives \emph{deployment}-shift.} Prefer
+        group-wise scales ($g{=}128$, $\approx0.1$ extra bits/weight) whenever the policy will run
+        out-of-distribution; per-channel can be lossless in-distribution yet collapse under shift.
+  \item \textbf{Stop at the wall.} Sub-2-bit weights are unreachable regardless of preconditioning
+        (W2A8 rotated still $=0\%$); W4A4 and W3A8 are the free operating points.
+  \item \textbf{Certify closed-loop, with task-level metrics (Sec.~\ref{sec:eval}).} Open-loop /
+        aggregate numbers are structurally blind to the failures above.
+\end{enumerate}
+
+\section{Task-Level Closed-Loop Evaluation}\label{sec:eval}
+The effects in Sec.~\ref{sec:evidence} are invisible to the metrics practitioners usually report.
+Open-loop L2 called INT4 ``lossless'' on a policy that freezes closed-loop; suite-averaged success
+hides which tasks pay the quantization cost. We consolidate the metrics that exposed each effect into
+a portable protocol:
+\begin{itemize}
+  \item \textbf{Generation coherence}---fraction of frames emitting a well-formed (non-degenerate)
+        action/trajectory. This is the metric that separated per-channel ($3.7\%$) from group-wise
+        ($73.5\%$) INT4 where collision counts were confounded.
+  \item \textbf{Degenerate-frame recovery rate}---fraction of degenerate frames that return to
+        well-formed within a short window. This exposed a \emph{qualitative} gap (per-channel $12\%$
+        vs.\ group-128 $74\%$): one regime stays stuck, the other self-corrects.
+  \item \textbf{Command jitter / temporal consistency}---rate of direction reversals between
+        consecutive steps. On SmolVLA, temporal context cut jitter from $14.2\%$ to $6.4\%$ and
+        raised $5$-step consistency to $83.1\%$---a sequential-quality signal single-step accuracy
+        cannot see.
+  \item \textbf{Per-task and rollout-efficiency breakdowns}---per-task success and steps-to-success,
+        which localized the OpenVLA-OFT W4A4 penalty to contact-rich long-horizon tasks
+        ($-10$\,pts) while transport-dominant tasks stayed within noise.
+\end{itemize}
+Reporting these four, closed-loop, is the minimal honest standard for a quantized VLA and is what
+allowed the single principle to be identified across embodiments.
+
+\section{Related Work}
+Incoherence processing for LLM quantization---QuaRot \cite{quarot}, SpinQuant \cite{spinquant},
+QuIP \cite{quip}, building on GPTQ \cite{gptq}/AWQ \cite{awq}/SmoothQuant \cite{smoothquant}---
+establishes the rotation machinery we invoke, but targets language perplexity, not closed-loop
+control. Concurrent VLA-specific PTQ \cite{omegaqvla,dyqvla} targets diffusion action heads on single
+platforms. Our contribution is orthogonal and unifying: we show that rotation and granularity are one
+knob, that the binding constraint migrates predictably with backbone scale and domain shift across
+manipulation/driving/navigation, and that task-level closed-loop metrics are what make the effect
+legible.
+
+\section{Limitations}
+This is a synthesis of three studies, each on one model/benchmark with simulated (fake-quant)
+weights, single-seed at $100$--$400$ rollouts; the packed-kernel latency/energy wins remain partly
+projected. The unification is a predictive account backed by the measured agreements above, not a
+new controlled experiment sweeping backbone scale continuously---which is the natural next step.
+
+\section{Conclusion}
+Across manipulation, driving, and navigation, low-bit VLA quantization is governed by one quantity:
+how quantization-friendly the activation distribution is, controlled by incoherence rotation and by
+scale granularity, and evaluated against the \emph{deployment} distribution rather than the
+calibration one. The same principle explains why a 7B manipulator needs a rotation, a 0.5B planner
+needs finer granularity, and a 256M navigator needs neither---and why all of it is invisible without
+task-level closed-loop metrics. The result is a single decision procedure that transfers to the next
+VLA and the next robot.
+
+\begin{thebibliography}{99}
+\small
+\bibitem{openvla} A.~Kim et al. ``OpenVLA: An Open-Source Vision-Language-Action Model.'' 2024.
+\bibitem{openvlaoft} M.~Kim et al. ``Fine-Tuning Vision-Language-Action Models (OpenVLA-OFT).'' 2025.
+\bibitem{gptq} E.~Frantar et al. ``GPTQ: Accurate Post-Training Quantization for GPTs.'' 2022.
+\bibitem{awq} J.~Lin et al. ``AWQ: Activation-aware Weight Quantization for LLM Compression.'' 2023.
+\bibitem{smoothquant} G.~Xiao et al. ``SmoothQuant: Accurate and Efficient PTQ for LLMs.'' 2022.
+\bibitem{quarot} S.~Ashkboos et al. ``QuaRot: Outlier-Free 4-Bit Inference in Rotated LLMs.'' 2024.
+\bibitem{spinquant} Z.~Liu et al. ``SpinQuant: LLM Quantization with Learned Rotations.'' 2024.
+\bibitem{quip} J.~Chee et al. ``QuIP / QuIP\#: 2-Bit Quantization with Incoherence Processing.'' 2023--2024.
+\bibitem{omegaqvla} ``$\Omega$-QVLA: Robust Quantization for VLAs via Composite Rotation and Per-step Scaling.'' 2026.
+\bibitem{dyqvla} ``DyQ-VLA: Temporal-Dynamic-Aware Quantization for Embodied VLAs.'' arXiv:2603.07904, 2026.
+\end{thebibliography}
+
+\end{document}

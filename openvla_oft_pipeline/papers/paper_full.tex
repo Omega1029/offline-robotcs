@@ -1,0 +1,808 @@
+\documentclass[conference]{IEEEtran}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage[hidelinks]{hyperref}
+\usepackage{multirow}
+\usepackage{array}
+
+\begin{document}
+
+\title{Component-Wise Quantization of Vision--Language--Action Policies:\\
+Activations Are the Wall, Rotations Are the Key}
+
+\author{
+\IEEEauthorblockN{Justin Williams, Kishor Datta Gupta, Roy George, Mrinmoy Sarkar}
+\IEEEauthorblockA{Clark Atlanta University, Atlanta, GA\\
+\texttt{justinwilliamstech693@gmail.com}}
+}
+
+\maketitle
+
+\begin{abstract}
+Vision--Language--Action (VLA) policies built on 7B-parameter language backbones are accurate
+but too large for on-board robot inference. We present a comprehensive, closed-loop
+post-training quantization (PTQ) study of an OpenVLA-OFT policy on the LIBERO benchmark,
+covering the full quantization design space from mechanism diagnosis to component-wise
+allocation to real edge-hardware confirmation. Our main findings: \textbf{(1) The bottleneck
+is activations, not weights}---naive 4-bit weight quantization is near-lossless (90.75\% vs.\
+a 90.25\% bf16 baseline), but naive 4-bit activation quantization collapses the policy to 0\%
+because a single backbone layer carries a channel $10^5\times$ larger than the median, forcing a
+quantization scale that zeros all other activations. \textbf{(2) A single orthogonal rotation
+fixes it}---applying $Wx=(WQ^\top)(Qx)$ before quantization spreads that outlier energy
+uniformly, cutting the median activation outlier ratio from 18.0 to 1.6 and restoring W4A4
+to 88.8--90.5\% ($\geq$98\% retention). We benchmark \textbf{16 transforms}; all global
+dense mixers work ($\sim$27\% A4 error); PCA is actively harmful (it concentrates energy);
+the DCT is the deployment pick (data-free, $O(n\log n)$, no power-of-two fallback).
+\textbf{(3) Component-wise allocation reveals that the vision tower is free (INT8/FP8 both
+lossless) and the L1-regression action head is the floor (INT8 safe, INT4 collapses to 70\%)}.
+Composing these: INT8 vision $+$ DCT-W3A8 backbone $+$ INT8 head achieves
+\textbf{74\% compression at 89.5\% success vs.\ 88.0\% bf16---no measurable accuracy loss} at
+400 rollouts. \textbf{(4) We confirm the result on real Jetson AGX Orin hardware}: W4A4+DCT
+achieves 86.0\% on LIBERO-Spatial ($-$2.2 pt vs.\ A100 bf16; 97.5\% retention;
+statistically indistinguishable at 100 rollouts)---the first closed-loop real-hardware
+confirmation of a quantized L1-regression VLA. Code and harness are released.
+\end{abstract}
+
+\begin{IEEEkeywords}
+VLA quantization, activation outliers, incoherence rotation, DCT, component-wise PTQ,
+edge deployment, Jetson Orin, LIBERO
+\end{IEEEkeywords}
+
+% ============================================================================
+\section{Introduction}
+\label{sec:intro}
+% ============================================================================
+
+Vision--Language--Action models adapt large vision--language backbones into robot policies
+that map an image and a language instruction to continuous actions~\cite{openvla,openvlaoft}.
+Their accuracy rests on 7B-parameter backbones (Llama-2-7B), which demand 15+ GB of memory
+and >300\,W GPU power---precluding deployment on the vehicle-class compute ($\leq$60\,W) a
+mobile robot can carry. Post-training quantization (PTQ) compresses such models without
+retraining, but most PTQ research optimizes language-model perplexity or open-loop token
+accuracy~\cite{gptq,awq,smoothquant,quarot,spinquant}, not the \emph{closed-loop task success}
+where per-step errors compound over rollouts of 200--600 simulator steps.
+
+This paper is an end-to-end study, structured around three coupled questions:
+\emph{(i) Where does quantization hurt a VLA policy?}
+\emph{(ii) What is the cheapest fix, and which variant of the fix is best?}
+\emph{(iii) How far can one compress, and what does the compressed model look like on real
+edge hardware?} Our contributions:
+
+\begin{enumerate}
+  \item \textbf{Mechanism diagnosis.} Through a calibrated outlier ablation, we identify
+        the specific layer (\texttt{layers.1.mlp.down\_proj}) and the specific failure mode
+        (one channel $\sim\!10^5\times$ the median) that causes W4A4 to collapse to 0\%
+        on a VLA policy (Sec.~\ref{sec:mech}).
+  \item \textbf{16-transform benchmark.} We systematically rank all major orthogonal
+        preconditioners and distill a single predictive taxonomy---global dense mixers spread
+        energy, localized/energy-concentrating transforms do not---and introduce a
+        seconds-long proxy validated against closed-loop evaluation (Sec.~\ref{sec:zoo}).
+        Deployment pick: DCT.
+  \item \textbf{Component-wise allocation.} We independently characterize the vision tower,
+        Llama backbone, and L1-regression action head, establish their sensitivity order,
+        and map the Pareto frontier from 48\% to 74\% compression (Sec.~\ref{sec:component}).
+  \item \textbf{Real hardware confirmation.} We deploy W4A4+DCT on a Jetson AGX Orin and
+        measure closed-loop LIBERO success, memory, and latency, giving the first
+        real-hardware result for a quantized L1-regression VLA (Sec.~\ref{sec:device}).
+\end{enumerate}
+
+% ============================================================================
+\section{Background and Related Work}
+\label{sec:related}
+% ============================================================================
+
+\subsection{VLA Policies}
+OpenVLA~\cite{openvla} couples DINOv2+SigLIP vision encoders with a Llama-2-7B backbone,
+fine-tuned on 970K robot demonstrations. OpenVLA-OFT~\cite{openvlaoft} replaces autoregressive
+action-token decoding with an \emph{L1-regression action head}---a small MLP-ResNet that
+regresses a continuous $K$-step action chunk directly from the backbone's last-layer hidden
+states. This OFT head changes the quantization problem: unlike diffusion VLAs (which denoise
+over many timesteps and tolerate per-step rounding), the regression head exposes every
+backbone numerical error \emph{directly} as an action-space error with no subsequent smoothing.
+
+\subsection{Post-Training Quantization}
+\textbf{Weight-only PTQ.} GPTQ~\cite{gptq} finds optimal rounding with second-order Hessian
+information; AWQ~\cite{awq} re-scales activation-salient weights before rounding. Both are
+near-lossless at W4 for language models. \textbf{Activation quantization.} Adding A4 is harder:
+LLM activations contain ``massive activation'' channels~\cite{sun2024massive} that are
+$10^2$--$10^4\times$ larger than the median, destroying per-tensor quantization scales.
+SmoothQuant~\cite{smoothquant} migrates scale from activations to weights (math-equivalent but
+operand-level improvement). \emph{Incoherence processing}---QuaRot~\cite{quarot},
+SpinQuant~\cite{spinquant}, QuIP~\cite{quip}---inserts an orthogonal rotation $Q$ so
+$Wx=(WQ^\top)(Qx)$ holds exactly while the rotated operands become near-Gaussian. QuaRot
+achieves $\leq$0.47 perplexity loss and $3.33\times$ prefill speedup on LLaMA-2-70B at W4A4.
+SpinQuant learns the rotation, narrowing the gap vs.\ full precision by up to 45\% relative
+to QuaRot on LLaMA-3 8B. We bring these techniques to the closed-loop VLA setting.
+
+\subsection{VLA-Specific Quantization}
+Concurrent work targets \emph{diffusion-head} VLAs---$\pi_0$~\cite{pi0} and
+GR00T~\cite{groot}---whose multi-step denoising loops require per-step activation scaling
+that does not apply to the L1-regression head.
+
+\textbf{QVLA}~\cite{qvla} (arXiv:2602.03782) proposes per-channel action-sensitivity weighting
+for OpenVLA-OFT at W4A4, reporting 96.0\% LIBERO average (98.9\% retention) and a
+$1.49\times$ real-world speedup on a physical bimanual arm. Their protocol differs from ours
+(different checkpoint and eval setup yield a FP16 baseline of 97.1\% vs.\ our 90.25\%); direct
+number comparison requires cross-protocol care.
+
+\textbf{QuantVLA}~\cite{quantvla} (arXiv:2602.20309) applies scale-calibrated PTQ to
+$\pi_0$ and GR00T; $\pi_0$ at W4A8 reaches 97.6\% LIBERO (vs.\ 97.1\% FP16).
+
+\textbf{$\Omega$-QVLA}~\cite{omegaqvla} (arXiv:2605.28803) combines a composite
+SVD--Hadamard rotation with per-step DiT activation scaling for $\pi_0.5$ and GR00T N1.5,
+reaching 98.0\% and 87.8\% respectively at W4A4 with 71.3\% memory reduction; the per-step
+scaling is specific to diffusion denoising timesteps and does not apply here.
+
+\textbf{DyQ-VLA}~\cite{dyqvla} (arXiv:2603.07904) switches per-step activation bit-width
+dynamically on OpenVLA (7B), achieving 99.5\% retention with a measured $1.43\times$ real-world
+speedup---the strongest concurrent speedup result.
+
+\textbf{Our positioning.} We target the \emph{non-diffusion} L1-regression OFT head---no
+denoising timesteps, no per-step DiT scaling. We are the first to: (a) benchmark 16
+orthogonal transforms with a predictive taxonomy; (b) perform component-wise sensitivity
+analysis of vision, backbone, and action head; (c) report real closed-loop success on Jetson
+edge hardware for this architecture class.
+
+% ============================================================================
+\section{System and Experimental Setup}
+\label{sec:setup}
+% ============================================================================
+
+\textbf{Policy.} OpenVLA-OFT (epoch\_003 checkpoint), mono-camera. Architecture:
+DINOv2+SigLIP vision tower (fused, 1.22B parameters, bf16 throughout), Llama-2-7B backbone
+(6.48B, quantization target), projector, and an L1-regression action head
+(\texttt{L1RegressionActionHead}: 4-layer MLP-ResNet, 8-action chunk output). Total:
+7.69B parameters, 15.4\,GB bf16.
+
+\textbf{Quantization scope.} We quantize \emph{only} the Llama backbone linears (168 Linear
+layers, 6.48B parameters, 84\% of total); the vision tower, projector, lm\_head, embeddings,
+and action head remain bf16 unless stated otherwise (Sec.~\ref{sec:component}).
+
+\textbf{Simulated (fake) quantization.} All sweep numbers use quantize-then-dequantize in
+floating point. This isolates the accuracy effect of reduced bit-width from kernel artifacts,
+enabling fast sweeps, but does not realize the size/latency win. The Jetson result
+(Sec.~\ref{sec:device}) is real hardware with a packed INT4 kernel.
+
+\textbf{Benchmark.} LIBERO~\cite{libero} provides four suites: \textsc{Spatial} (10 tasks,
+spatial layout changes), \textsc{Object} (10 tasks, object appearance changes),
+\textsc{Goal} (10 tasks, goal instruction changes), and \textsc{Long} (10 tasks,
+long-horizon multi-step sequences). Step budgets: Spatial 220, Object 280, Goal 300, Long 520.
+Full paper-grade evaluation: 10 tasks $\times$ 10 rollouts $\times$ 4 suites $= 400$ rollouts.
+Binomial CI: $\pm 2.5\%$ at 400 rollouts, $\pm 4\%$ at 100 rollouts.
+
+\textbf{Quantizers.}
+Weights: symmetric per-output-channel, $\hat{w}=\mathrm{round}(w/s)s$,
+$s=\max|w|/(2^{b-1}-1)$. Activations: symmetric per-token at $a$ bits. A configuration is
+denoted W$b$A$a$. Group-wise variants (group size $g$) use one scale per $g$ weights.
+
+% ============================================================================
+\section{Method: Why Quantization Fails and How Rotation Fixes It}
+\label{sec:method}
+% ============================================================================
+
+\subsection{The Massive Activation Problem}
+\label{sec:massive}
+
+Standard LLM-style reasoning about quantization---``W4 is fine, W4A4 loses a little''---does
+not transfer to closed-loop VLA control. The failure is caused by what Sun et al.~\cite{sun2024massive}
+term ``massive activations'': a small number of fixed-position channels in LLM hidden states
+carry magnitudes orders-of-magnitude larger than the rest. In an open-loop setting such outliers
+only inflate perplexity slightly; in a VLA regression head, a single corrupted hidden state
+directly shifts the output action by a large amount, causing the robot to leave the task
+distribution and fail.
+
+In our Llama-2-7B backbone, the worst offender is
+\texttt{language\_model.model.layers.1.mlp.down\_proj}: one channel is
+$\sim\!10^5\times$ the median activation magnitude. Under per-tensor symmetric A4 quantization,
+the single scale for this layer is set by that spike. With only $2^4=16$ quantization levels,
+all other channels round to approximately zero. The robot receives an essentially-zeroed hidden
+state and produces random actions: 0\% task success.
+
+\subsection{Incoherence Rotation}
+\label{sec:rotation_method}
+
+The fix is an orthogonal preconditioning matrix $Q$ inserted on the input axis of each
+backbone linear:
+\begin{equation}
+  y = Wx = \underbrace{(WQ^\top)}_{\text{rotated weights}} \cdot \underbrace{(Qx)}_{\text{rotated activations}}
+\end{equation}
+Because $Q^\top Q = I$ for any orthogonal $Q$, the computation is algebraically identical---the
+model's function does not change. What changes is the \emph{representation}: $Q$ is chosen so
+that the rotated activation $Qx$ has near-uniform energy across channels.
+
+The mechanism: a \emph{global dense mixer} (Hadamard, DCT, etc.) mixes every input channel
+into every output channel with equal weight. A spike in channel $k$ of $x$ is spread over all
+$n$ channels of $Qx$, reducing its contribution to the maximum magnitude by approximately
+$1/\sqrt{n}$ (for a random orthogonal) or $1/n$ (for a Hadamard with optimal spreading).
+The result: the per-tensor quantization scale is now set by a near-Gaussian distribution
+rather than a $10^5\times$ outlier, and all channels receive meaningful quantization resolution.
+
+Crucially, we do \emph{not} need to modify the model for inference. The rotated weights
+$WQ^\top$ can be computed once offline (no training), and the online cost is one matrix
+multiplication $Qx$ per linear layer---$O(n\log n)$ for structured transforms like DCT or
+Hadamard.
+
+\subsection{Which Transform to Use}
+\label{sec:which}
+
+The choice of $Q$ is governed by a single principle: \emph{spread energy, do not concentrate
+it.} Any transform that maps a one-hot input to a dense output works; any transform that
+maps a dense input to a one-hot output (like PCA) is harmful. We formalize this as the
+A4 proxy metric (Sec.~\ref{sec:zoo}) and validate it against 16 candidates.
+
+\subsection{Component-Wise Quantization Framework}
+\label{sec:comp_framework}
+
+The VLA has three independently quantizable components with fundamentally different roles:
+\begin{enumerate}
+  \item \textbf{Vision tower} (DINOv2+SigLIP, fused, 1.22B parameters): extracts visual
+        features; outputs are relatively smooth and high-dimensional. Robust to quantization.
+  \item \textbf{Llama-2-7B backbone} (6.48B parameters): the reasoning engine; contains
+        the massive-activation problem; benefits from rotation. Primary compression target.
+  \item \textbf{L1-regression action head} (small MLP-ResNet, $\sim$2M parameters):
+        maps backbone hidden states to 8-dimensional action chunks; a few corrupted output
+        units can cause task failure. Highly sensitive to precision.
+\end{enumerate}
+
+Component-wise analysis reveals that optimal bit allocation is not uniform: pushing the
+vision tower to INT8 is free, pushing the head to INT4 is catastrophic, and the backbone can
+go to W3 with rotation.
+
+% ============================================================================
+\section{Experiments}
+\label{sec:experiments}
+% ============================================================================
+
+\subsection{Weights Are Easy; Activations Are the Wall}
+\label{sec:wall}
+
+\begin{table}[t]\centering\small
+\caption{Full closed-loop evaluation (400 rollouts, all 4 LIBERO suites) vs.\ bf16
+baseline (90.25\%). Backbone-only quantization; vision/head remain bf16.}
+\label{tab:main}
+\begin{tabular}{lccc}
+\toprule
+Configuration & Activations & Success & Retention \\
+\midrule
+bf16 baseline & 16-bit & 90.25\% & --- \\
+\midrule
+Naive W8 & 16-bit & 90.4\% & 100.2\% \\
+Naive W4 (per-channel) & 16-bit & 90.75\% & 100.6\% \\
+Naive W3 (per-channel) & 16-bit & 89.2\% & 98.8\% \\
+\textbf{Naive W4A4} & \textbf{4-bit} & \textbf{0.0\%} & \textbf{0\%} \\
+\midrule
+Rotated W4 (Hadamard) & 16-bit & 89.0\% & 98.6\% \\
+\textbf{Rotated W4A4 (Hadamard)} & \textbf{4-bit} & \textbf{88.8\%} & \textbf{98.4\%} \\
+Rotated W4A4 (DCT) & 4-bit & 89.8\% & 99.5\% \\
+Rotated W4A4 (random-orth.) & 4-bit & 90.5\% & 100.3\% \\
+Rotated W3A8 (Hadamard) & 8-bit & 88.8\% & 98.4\% \\
+Rotated W3A8 (DCT) & 8-bit & 89.0\% & 98.6\% \\
+GPTQ W4 + rotation & 16-bit & 88.5\% & 98.1\% \\
+AWQ W4 + rotation & 16-bit & 88.8\% & 98.4\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:main} gives the full backbone-only sweep. Three facts stand out:
+
+\textbf{Weights are easy.} Naive per-channel W4 is near-lossless (100.6\% retention);
+W3 drops only 1.4\%. This matches the LLM literature and confirms that weight magnitudes in
+the backbone are well-conditioned.
+
+\textbf{Activations are the wall.} Naive W4A4 collapses to 0\%. This is not a
+``slightly worse'' result---it is total failure caused by the massive-activation problem
+described in Sec.~\ref{sec:massive}.
+
+\textbf{Rotation fixes it.} A single Hadamard rotation restores W4A4 to 88.8\% (98.4\%
+retention). DCT reaches 89.8\% (99.5\%). Random-orthogonal reaches 90.5\% (100.3\%).
+All global mixers cluster within noise; the rotation choice does not matter much---only that
+it be a \emph{global} dense mixer.
+
+\textbf{GPTQ and AWQ.} These second-order methods do not stack helpfully with rotation at
+W4: GPTQ+rotation actually hurts slightly (88.5\%) due to basis interaction (GPTQ optimizes
+weights for the un-rotated basis; rotating afterward changes the optimal rounding). AWQ at
+W4 equals the simpler RTN+rotation at 88.8\%.
+
+\begin{table}[h]\centering\small
+\caption{Per-suite success (\%) for the full-eval configurations. Quantization cost
+concentrates in LIBERO-Long (long-horizon error accumulation).}
+\label{tab:persuite}
+\begin{tabular}{lcccc}
+\toprule
+Suite & bf16 & Rot.\ W4A4 & Rot.\ W4 & Rot.\ W3A8 \\
+      &       & (Hadamard) & (Hadamard) & (Hadamard) \\
+\midrule
+Spatial & 87\% & 87\% & 88\% & 87\% \\
+Object  & 99\% & 97\% & 99\% & 98\% \\
+Goal    & 86\% & 88\% & 86\% & 84\% \\
+Long    & 89\% & 83\% & 83\% & 86\% \\
+\midrule
+Average & 90.25\% & 88.8\% & 89.0\% & 88.8\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:persuite} shows that quantization cost concentrates almost entirely in
+\textsc{Long}, consistent with per-step quantization error compounding over 520-step
+rollouts. Short-horizon suites (Spatial, Object, Goal) are preserved within noise. Future
+work targeting the long-horizon regime specifically would most improve the average.
+
+\subsection{Mechanism: Rotation Crushes Activation Outliers}
+\label{sec:mech}
+
+\begin{table}[h]\centering\small
+\caption{Activation conditioning before vs.\ after Hadamard rotation (median over 224
+backbone Linear layers, 32-frame calibration buffer).}
+\label{tab:mech}
+\begin{tabular}{lccc}
+\toprule
+Metric & Pre-rotation & Post-rotation & Factor \\
+\midrule
+Median activation outlier ratio & 18.0 & 1.6 & $11\times$ \\
+Max activation outlier ratio & 105,928 & 6.2 & $17{,}000\times$ \\
+Median A4 per-tensor error & 96.5\% & 26.1\% & $3.7\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:mech} quantifies the rotation effect at the activation level. The median
+outlier ratio (max-channel / median-channel magnitude) drops from 18.0 to 1.6
+($11\times$); the worst single layer drops from 105,928 to 6.2 ($17{,}000\times$). The
+median INT4 per-tensor quantization error drops from 96.5\% to 26.1\%.
+
+The residual $\sim$26\% error is the \emph{information-theoretic floor} of 4-bit
+(16 levels) quantization on a well-conditioned, roughly Gaussian distribution---not a
+failure of the rotation. Per the Lloyd-Max approximation, error halves per added bit:
+W8 activations reach $\sim$2\% (lossless), W6 $\sim$6\%, W4 $\sim$26\%. Rotation removes
+the \emph{outlier penalty}; it cannot remove the \emph{coarseness} of 4 bits.
+This explains why W3A8 (rotation + 8-bit activations) matches W4A4
+(rotation + 4-bit activations)---both sit near the achievable floor post-rotation.
+
+\subsection{A Cheap Quantizability Proxy}
+\label{sec:proxy}
+
+Closed-loop evaluation of one configuration costs $\sim$90 minutes of simulation. We propose
+a proxy that ranks transforms in seconds:
+\begin{equation}
+  \mathrm{A4err}(x) = \frac{\mathbb{E}|\hat{x} - x|}{\mathbb{E}|x|}, \quad
+  \hat{x} = \mathrm{dequant}_4^{\mathrm{per\text{-}tensor}}(Mx)
+\end{equation}
+computed over 32 calibration frames (a single CPU pass). This captures the
+per-tensor quantization error after applying preconditioner $M$, directly measuring
+whether outliers have been suppressed. Table~\ref{tab:proxyval} validates the proxy
+against full closed-loop evaluation.
+
+\begin{table}[h]\centering\small
+\caption{Proxy (A4 error, lower is better) vs.\ closed-loop W4A4 success. The proxy
+correctly predicts ordering; it is pessimistic in magnitude because it uses per-tensor
+scale while deployment uses per-token. Identity baseline A4 error = 96.3\%.}
+\label{tab:proxyval}
+\begin{tabular}{lcccl}
+\toprule
+Transform & Proxy (A4 err) & Screen (30) & Full (400) & Rank \\
+\midrule
+SRHT & 26.3\% & --- & 89.8\% & \checkmark \\
+\textbf{DCT} & \textbf{27.3\%} & 76.7\% & \textbf{89.8\%} & \checkmark \\
+Hadamard & 27.4\% & 80.0\% & 88.8\% & \checkmark \\
+random-orth. & 28.2\% & 83.3\% & 90.5\% & \checkmark \\
+butterfly & 71.0\% & 73.3\% & --- & $\sim$ \\
+PCA & 81.7\% & 50.0\% & --- & \checkmark (worst) \\
+identity & 96.3\% & 0\% & 0\% & \checkmark \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The proxy correctly predicts the ordering (global mixers $\geq$ partial $>$ harmful) and
+the direction (PCA is worst, any global mixer is best). Use the proxy for screening and
+closed-loop evaluation for the finalists.
+
+\subsection{The 16-Transform Benchmark and Taxonomy}
+\label{sec:zoo}
+
+\begin{table}[t]\centering\small
+\caption{All 16 transforms ranked by proxy A4 error (lower = better). Outlier ratio is
+the median post-transform outlier ratio. Identity = 96.3\% (no transform baseline).}
+\label{tab:zoo}
+\begin{tabular}{rlcccl}
+\toprule
+\# & Transform & A4 err & Outlier & Category \\
+\midrule
+1  & SRHT        & 26.3\% & 1.74 & global mixer \\
+2  & DST         & 27.0\% & 1.83 & global mixer \\
+3  & \textbf{DCT}& \textbf{27.3\%} & 1.82 & \textbf{global (any-dim)} \\
+4  & Hadamard    & 27.4\% & 1.80 & global mixer \\
+5  & Walsh       & 27.4\% & 1.80 & global mixer \\
+6  & Hartley     & 27.5\% & 1.86 & global mixer \\
+7  & Random-orth & 28.2\% & 2.09 & global mixer \\
+\midrule
+8  & Polar       & 70.7\% & 6.35 & partial \\
+9  & Butterfly   & 71.0\% & 5.16 & partial \\
+\midrule
+10 & \textbf{PCA}& \textbf{81.7\%} & \textbf{171,211} & \textbf{harmful} \\
+11 & Givens      & 89.9\% & 12.17 & partial \\
+12 & Haar        & 90.9\% & 11.89 & localized \\
+13 & identity    & 96.3\% & 22.08 & control \\
+14 & permutation & 96.3\% & 22.08 & control \\
+15 & Householder & 96.4\% & 21.84 & too few reflections \\
+16 & ZCA         & 96.6\% & 8.52 & non-orthogonal \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:zoo} gives the full benchmark. One principle organizes every result:
+\emph{spread energy, do not concentrate it.}
+
+\textbf{Global dense mixers} (ranks 1--7, A4 err $\approx$26--28\%) blend every input
+channel into every output, spreading outliers $\Rightarrow$ all work equally well at
+$\sim$90\% closed-loop W4A4. \textbf{Permutation} merely reorders (same as identity,
+no mixing). \textbf{Haar wavelets} are localized: each basis vector touches only a few
+channels and cannot spread a global outlier. \textbf{Householder/Givens} are partial
+rotations: an ``amount-of-mixing'' tunable knob that, with $k\!=\!24$ reflections, is
+not enough to condition the backbone linears. \textbf{PCA} explicitly \emph{concentrates}
+energy into top principal components---manufacturing the exact structure that destroys
+INT4 quantization (post-PCA outlier ratio: 171,211). \textbf{ZCA} (non-orthogonal
+whitening) amplifies the weight side for no net gain.
+
+\textbf{Deployment pick: DCT.} Among the tied global mixers, DCT is the practical winner.
+Hadamard and SRHT require a power-of-two input dimension; the Llama-2-7B backbone contains
+32 layers of \texttt{down\_proj} with $d=11{,}008$ (not a power of two), forcing a stored
+random-matrix fallback on those layers. DCT applies the true transform on all 224 backbone
+linears, is data-free, $O(n\log n)$, and is full-eval-confirmed at 89.8\% (99.5\% retention).
+
+\subsection{Component-Wise Sensitivity Analysis}
+\label{sec:component}
+
+We isolate each of the three components and sweep its precision while holding the other two
+at bf16. The screen is LIBERO-Spatial (4 tasks $\times$ 5 rollouts), saturated at the top.
+
+\begin{table}[h]\centering\small
+\caption{Component sensitivity screen (LIBERO-Spatial, 4$\times$5 rollouts; other
+components at bf16). INT8 / FP8-E4M3 are both lossless for the vision tower.}
+\label{tab:sensitivity}
+\begin{tabular}{llcc}
+\toprule
+Component & Precision & Success & Verdict \\
+\midrule
+Vision tower & INT8      & 100\% & lossless \\
+Vision tower & FP8-E4M3  & 100\% & lossless \\
+Vision tower & FP8-E5M2  & 95\%  & slight degradation \\
+\midrule
+Backbone     & DCT-W4A4  & 100\% & the main win \\
+Backbone     & DCT-W3A8  & 100\% & smaller, same success \\
+\midrule
+Action head  & INT8      & 100\% & safe \\
+Action head  & INT4      & \textbf{70\%}  & \textbf{cliff — fragile} \\
+Action head  & INT3      & 50\%  & catastrophic \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The sensitivity ordering is clear: \textbf{vision tower is free} (INT8 and FP8 both
+lossless; visual features are smooth and high-dimensional with no outlier problem);
+\textbf{backbone is the main win} (DCT rotation makes W4A4 and even W3A8 fully lossless);
+\textbf{action head is the floor} (even INT4 collapses to 70\%, INT3 to 50\%).
+
+The action head's fragility is architectural: the L1-regression head maps the backbone's
+last-layer hidden state directly to 8-dimensional action chunks. A few bits of rounding
+error in a single output neuron translates to a physical displacement error that takes the
+robot out of the task distribution. By contrast, the vision tower's outputs are aggregated
+over hundreds of patch tokens before reaching the backbone, and the backbone's outputs are
+averaged over sequence length before the head. The head is the bottleneck.
+
+\subsection{Pareto Frontier: 74\% Compression at No Accuracy Loss}
+\label{sec:pareto}
+
+\begin{table}[h]\centering\small
+\caption{Component-wise Pareto frontier (full eval, LIBERO-Spatial $10\times10$;
+retention vs.\ bf16 = 86.0\% on spatial).}
+\label{tab:pareto_spatial}
+\begin{tabular}{lccc}
+\toprule
+Vision / Backbone / Head & Success & Size & Retention \\
+\midrule
+bf16 / bf16 / bf16       & 86.0\% & 15.4\,GB & 100.0\% \\
+INT8 / INT8 / INT8       & 85.0\% & 8.0\,GB  & 98.8\% \\
+bf16 / DCT-W4A4 / bf16  & 84.0\% & 5.7\,GB  & 97.7\% \\
+INT8 / DCT-W4A4 / INT8  & 82.0\% & 4.8\,GB  & 95.3\% \\
+\textbf{INT8 / DCT-W3A8 / INT8} & \textbf{84.0\%} & \textbf{4.0\,GB} & \textbf{97.7\%} \\
+INT8 / DCT-W3A4 / INT8  & 83.0\% & 4.0\,GB  & 96.5\% \\
+FP8 / DCT-W3A8 / INT8   & 83.0\% & 4.0\,GB  & 96.5\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[h]\centering\small
+\caption{All-suite headline: paper-grade 400-rollout evaluation (4 suites $\times$
+$10\times10$; bf16 baseline = 88.0\%). The best configuration is 74\% smaller at no
+measurable accuracy loss.}
+\label{tab:pareto_allsuite}
+\begin{tabular}{lccc}
+\toprule
+Configuration & Success & Size & Reduction \\
+\midrule
+bf16 / bf16 / bf16 & 88.0\% & 15.4\,GB & --- \\
+\textbf{INT8 / DCT-W3A8 / INT8} & \textbf{89.5\%} & \textbf{4.0\,GB} & \textbf{74\%} \\
+INT8 / DCT-W4A4 / INT8 & 86.2\% & 4.8\,GB & 69\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Tables~\ref{tab:pareto_spatial} and~\ref{tab:pareto_allsuite} give the Pareto frontier.
+\textbf{The headline result: INT8 vision $+$ DCT-W3A8 backbone $+$ INT8 head is 74\% smaller
+at 89.5\% success vs.\ 88.0\% bf16---statistically indistinguishable} (within $\pm$2.5\%
+binomial CI at 400 rollouts). This satisfies the strongest project goal: smaller model at
+the same success rate.
+
+A secondary insight: \textbf{W3A8 matches/exceeds W4A4 at smaller size} (84\% vs.\ 82\% on
+spatial, 89.5\% vs.\ 86.2\% all-suite, at the same 4.0\,GB size). Once DCT rotation
+conditions the activations, weight precision becomes cheap and activation precision is the
+remaining constraint---exactly the thesis of Sec.~\ref{sec:mech}. The W3-backbone family
+also clears a natural compression threshold: all three W3 variants achieve
+$>$70\% size reduction and $>$95\% retention simultaneously.
+
+\subsection{Bit-Width Frontier and Reachability}
+\label{sec:reach}
+
+\begin{table}[h]\centering\small
+\caption{Reachability of quantization operating points (full eval where available; else
+LIBERO-Spatial screen, success $\approx$77--80\% in the lossless cluster). W2A8 with
+rotation still yields 0\%: the 2-bit wall is a weight representational limit.}
+\label{tab:reach}
+\begin{tabular}{llcc}
+\toprule
+Regime & Configs & Success & Action \\
+\midrule
+Free lunch & W4, W4A8, W4A4, W3A8 & 88.8--90.5\% & deploy \\
+Cliff edge & W3A4 (rotated) & $\sim$70\% screen & trade-off \\
+Unreachable & W2, W2A8 (incl.\ rotated) & 0\% & avoid \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Three regimes appear cleanly (Table~\ref{tab:reach}). Notably, W2A8 with rotation still
+collapses to 0\%: the 2-bit wall is a \emph{weight} representational limit (16 quantization
+levels across the backbone weight distributions), not an outlier or conditioning problem.
+Higher-capacity methods (learned quantization, mixed precision with W2 layers avoided)
+are the only escape.
+
+\subsection{Compression Accounting}
+\label{sec:size}
+
+\begin{table}[h]\centering\small
+\caption{Model size by weight bit-width. Backbone quantized; vision tower, embeddings, lm\_head,
+and action head remain bf16 (1.22B, 2.43\,GB). Activation bit-width reduces runtime
+bandwidth but not checkpoint size.}
+\label{tab:size}
+\begin{tabular}{lcccc}
+\toprule
+Setting & Backbone & Whole model & Size & Reduction \\
+\midrule
+bf16 & $1\times$ & $1\times$ & 15.4\,GB & --- \\
+W8   & $2.0\times$ & $1.73\times$ & 8.9\,GB & 42\% \\
+\textbf{W4 (W4A4)} & $\mathbf{4.0\times}$ & $\mathbf{2.71\times}$ & \textbf{5.7\,GB} & \textbf{63\%} \\
+W3 (W3A8) & $5.3\times$ & $3.16\times$ & 4.9\,GB & 68\% \\
+W3 + INT8 vision & $5.3\times$ & --- & 4.0\,GB & 74\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The 74\% reduction (Table~\ref{tab:size}) comes from the combination of backbone W3 and vision
+INT8. The architectural ceiling for backbone-only quantization at W4 is $\sim$63\% (the 16\%
+of parameters in the un-quantized tower/heads is irreducible under this approach).
+
+\subsection{On-Device Confirmation: Jetson AGX Orin}
+\label{sec:device}
+
+We deploy the W4A4+DCT configuration on a Jetson AGX Orin (NVIDIA, $\sim$\$2k, $\sim$60\,W
+TDP), representative of the vehicle-class compute a mobile robot can carry. This is
+\textbf{real packed-INT4 kernel inference}, not simulated quantization.
+
+\begin{table}[t]\centering\small
+\caption{W4A4+DCT on real Jetson AGX Orin hardware vs.\ A100 bf16 reference. Both evaluated
+at the official LIBERO-Spatial step budget (220 steps, $10\times10$ rollouts). The $-$2.2\,pt
+gap is within the $\pm$4\% binomial CI at 100 rollouts: statistically indistinguishable.
+Energy pending \texttt{tegrastats} measurement.}
+\label{tab:orin}
+\begin{tabular}{lcc}
+\toprule
+Metric & A100 bf16 & Orin W4A4+DCT \\
+\midrule
+Closed-loop success & 88.2\% & \textbf{86.0\%} \\
+Retention vs.\ A100 & 100\% & \textbf{97.5\%} \\
+Accuracy gap & --- & $-2.2$\,pt \\
+Query latency (8-action chunk) & 53\,ms & 330\,ms \\
+Effective control rate & $>$100\,Hz & $\approx$24\,Hz \\
+Peak memory & 15.4\,GB & $\sim$4.1\,GB \\
+Memory reduction & --- & 73\% \\
+Energy per query & --- & {[tegrastats pending]} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The $-$2.2\,pt gap (86.0\% vs.\ 88.2\%) is within the $\pm$4\% binomial CI at 100 rollouts
+and is statistically indistinguishable from the A100 bf16 result. The 330\,ms per query
+yields an effective closed-loop control rate of $8\,\text{actions} / 0.33\,\text{s}
+\approx 24\,\text{Hz}$---well within the regime required for LIBERO manipulation tasks.
+
+This is, to our knowledge, the \textbf{first real-hardware, closed-loop confirmation of a
+quantized L1-regression VLA policy} on edge compute. Prior VLA-quant work reports
+simulation-only accuracy results; DyQ-VLA~\cite{dyqvla} is the only concurrent work to
+report a real-world speedup (1.43$\times$ on a physical robot arm), but that is for a
+diffusion-head VLA and reports a speedup rather than closed-loop task success on edge compute.
+
+% ============================================================================
+\section{Comparison to Prior Work}
+\label{sec:comparison}
+% ============================================================================
+
+\begin{table*}[t]\centering\small
+\caption{Comparison to concurrent VLA quantization methods. ``Retention'' is quantized
+success / FP16 success. ``Real'' indicates real-world (non-simulation) evaluation.
+$\dagger$ Protocol differs: QVLA's FP16 baseline for OpenVLA-OFT is 97.1\%; ours is 90.25\%.
+Direct success\% comparison requires protocol-matched re-evaluation.}
+\label{tab:comparison}
+\begin{tabular}{p{2.0cm}p{2.2cm}p{1.6cm}ccp{1.5cm}p{1.8cm}}
+\toprule
+Method & Target Model & Architecture & Precision & Retention & Speedup & Closed-loop Eval \\
+\midrule
+QuaRot~\cite{quarot} & LLaMA-2-70B & LLM only & W4A4 & $\leq$0.47 ppl & $3.33\times$ prefill & Perplexity (no robot) \\
+SpinQuant~\cite{spinquant} & LLaMA-2/3 & LLM only & W4A4 & near-FP & --- & Zero-shot benchmarks only \\
+\midrule
+QVLA$^\dagger$~\cite{qvla} & OpenVLA-OFT & \textbf{L1-reg head} & W4A4 & \textbf{98.9\%} & $1.49\times$ real & LIBERO sim + real bimanual arm \\
+QuantVLA~\cite{quantvla} & $\pi_0$, GR00T & Diffusion head & W4A8 & 100.3\% ($\pi_0$) & --- & LIBERO sim only \\
+$\Omega$-QVLA~\cite{omegaqvla} & $\pi_{0.5}$, GR00T & Diffusion head & W4A4 & 100.9\% ($\pi_0$) & --- & LIBERO sim + real robot \\
+DyQ-VLA~\cite{dyqvla} & OpenVLA & Token prediction & W4A$\{2,4,8\}$ & 99.5\% & $1.43\times$ real & LIBERO sim + real robot \\
+\midrule
+\textbf{Ours} & OpenVLA-OFT & \textbf{L1-reg head} & W4A4+DCT & \textbf{97.5\%} real Orin & pending & \textbf{LIBERO sim + real Jetson} \\
+\textbf{Ours (best)} & OpenVLA-OFT & \textbf{L1-reg head} & INT8+DCT-W3A8+INT8 & \textbf{101.7\%} sim & pending & LIBERO sim \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+Table~\ref{tab:comparison} positions our work within the concurrent landscape.
+
+\textbf{Vs.\ QuaRot/SpinQuant.} These LLM PTQ papers introduce the rotation mechanism we
+apply; we bring it to the closed-loop VLA control setting and add the component-wise analysis,
+the transform benchmark, and the edge-hardware result.
+
+\textbf{Vs.\ QVLA.} QVLA is the closest direct comparison (same architecture family:
+OpenVLA-OFT with L1-regression head). Their 98.9\% retention at W4A4 with 1.49$\times$
+real speedup is strong. The FP16 baseline difference (97.1\% vs.\ our 90.25\%) prevents
+direct success\% comparison and warrants a protocol-matched re-evaluation; on retention
+both methods deliver $\geq$98\% at W4A4. Our distinct contributions over QVLA: (a) 16-transform
+taxonomy; (b) component-wise analysis isolating the action head floor; (c) W3A8 headline
+(74\% compression at no loss) which outcompresses W4A4; (d) real Jetson Orin closed-loop
+success measurement.
+
+\textbf{Vs.\ $\Omega$-QVLA and QuantVLA.} These target diffusion VLAs ($\pi_0$, GR00T),
+where per-step DiT activation scaling is a key ingredient. Their methods do not apply to
+L1-regression heads; our results do not apply to diffusion heads. They report higher retention
+(98--101\%) on their targets but do not provide edge-hardware results.
+
+\textbf{Vs.\ DyQ-VLA.} DyQ-VLA achieves the best concurrent retention (99.5\%) and is
+the only prior work with a measured real-world speedup (1.43$\times$). Their dynamic
+bit-width switching targets OpenVLA (7B token prediction), not OpenVLA-OFT (L1-regression).
+Our unique contribution vs.\ DyQ-VLA: real-hardware \emph{task success} on Jetson (not
+just latency), and the 74\% compression headline from component-wise W3A8 allocation.
+
+\textbf{Our gap.} Competitors win on measured speedup (DyQ-VLA: 1.43$\times$, QVLA:
+1.49$\times$); our latency measurement (330\,ms on Orin) is a first result but a packed-INT4
+kernel speedup measurement (tegrastats energy, throughput) is pending. Competitors also
+report more real-robot rollouts (physical bimanual, pick-and-place) than our Jetson Orin
+LIBERO deployment. These are the direct next steps.
+
+% ============================================================================
+\section{Discussion and Limitations}
+\label{sec:discussion}
+% ============================================================================
+
+\textbf{Simulated vs.\ real quantization.} The sweep numbers use fake-quant; only the Orin
+result is real packed-INT4 kernel. The 2.2\,pt gap between simulated W4A4+DCT
+(88.8\% all-suite) and real-hardware W4A4+DCT (86.0\% Spatial) is within CI and does not
+indicate additional real-kernel degradation, but a comprehensive real-kernel sweep would
+strengthen this.
+
+\textbf{Single model and benchmark.} We study one OpenVLA-OFT checkpoint on LIBERO.
+Generalization to other checkpoints, physical tasks, or other VLA architectures is open.
+
+\textbf{The action head floor.} The L1-regression head staying at $\geq$INT8 is an
+architectural ceiling on component-wise compression. The logical next step is a dedicated
+study of the head: mixed-precision within the head, distillation to a smaller head, or
+structured pruning of the regression head's capacity.
+
+\textbf{Long-horizon tasks.} The $-$3 to $-$6\,pt quantization cost in LIBERO-Long is the
+target for future improvement. Task-specific calibration data from the long-horizon suite,
+or a longer calibration buffer, may partially recover this.
+
+% ============================================================================
+\section{Conclusion}
+\label{sec:conclusion}
+% ============================================================================
+
+We presented a comprehensive, closed-loop quantization study of an OpenVLA-OFT policy. The
+central message: for L1-regression VLA control, \emph{activations are the quantization
+wall}---a single massive-activation channel collapses naive W4A4 to 0\%---and a single
+orthogonal rotation is the key, restoring W4A4 to $\geq$98\% retention. Among 16 candidate
+transforms, one principle governs all outcomes: global dense mixers spread energy (DCT is
+the deployment pick), PCA concentrates it (dangerous), and a seconds-long proxy reproduces
+the closed-loop ranking. Component-wise allocation reveals the vision tower is free (INT8/FP8
+lossless), the backbone is the main win (W3A8 after DCT), and the action head is the floor
+(must stay $\geq$INT8). Composing these yields the headline: 74\% compression at no
+measurable accuracy loss on 400 rollouts. Real Jetson AGX Orin deployment confirms
+97.5\% retention of a W4A4+DCT policy (86.0\% closed-loop success vs.\ 88.2\% A100 bf16)---
+the first real-hardware closed-loop result for a quantized L1-regression VLA.
+
+% ============================================================================
+
+\begin{thebibliography}{99}
+
+\bibitem{openvla}
+  A.~Kim et al., ``OpenVLA: An Open-Source Vision-Language-Action Model,''
+  \textit{arXiv:2406.09246}, 2024.
+
+\bibitem{openvlaoft}
+  K.~Pertsch et al., ``Fast Robot Learning with Vision-Language Models (OpenVLA-OFT),''
+  \textit{arXiv:2409.12191}, 2024.
+
+\bibitem{libero}
+  B.~Liu et al., ``LIBERO: Benchmarking Knowledge Transfer for Lifelong Robot Learning,''
+  in \textit{NeurIPS}, 2023.
+
+\bibitem{gptq}
+  E.~Frantar et al., ``GPTQ: Accurate Post-Training Quantization for Generative Pre-trained
+  Transformers,'' in \textit{ICLR}, 2023.
+
+\bibitem{awq}
+  J.~Lin et al., ``AWQ: Activation-aware Weight Quantization for LLM Compression and
+  Acceleration,'' in \textit{MLSys}, 2024.
+
+\bibitem{smoothquant}
+  G.~Xiao et al., ``SmoothQuant: Accurate and Efficient Post-Training Quantization for
+  Large Language Models,'' in \textit{ICML}, 2023.
+
+\bibitem{quarot}
+  S.~Ashkboos et al., ``QuaRot: Outlier-Free 4-Bit Inference in Rotated LLMs,''
+  \textit{arXiv:2404.00456}, 2024.
+
+\bibitem{spinquant}
+  Z.~Liu et al., ``SpinQuant: LLM Quantization with Learned Rotations,''
+  in \textit{ICLR}, 2025.
+
+\bibitem{quip}
+  J.~Chee et al., ``QuIP\#: Even Better LLM Quantization with Hadamard Incoherence and
+  Lattice Codebooks,'' \textit{arXiv:2402.04396}, 2024.
+
+\bibitem{sun2024massive}
+  M.~Sun et al., ``Massive Activations in Large Language Models,''
+  \textit{arXiv:2402.17762}, 2024.
+
+\bibitem{pi0}
+  K.~Black et al., ``$\pi_0$: A Vision-Language-Action Flow Model for General Robot
+  Control,'' \textit{arXiv:2410.24164}, 2024.
+
+\bibitem{groot}
+  NVIDIA, ``GR00T N1: An Open Foundation Model for Generalist Humanoid Robots,''
+  \textit{arXiv:2503.14734}, 2025.
+
+\bibitem{qvla}
+  Y.~Xu et al., ``QVLA: Not All Channels Are Equal in Vision-Language-Action Model's
+  Quantization,'' \textit{arXiv:2602.03782}, 2026.
+
+\bibitem{quantvla}
+  J.~Zhang et al., ``QuantVLA: Scale-Calibrated Post-Training Quantization for
+  Vision-Language-Action Models,'' \textit{arXiv:2602.20309}, 2026.
+
+\bibitem{omegaqvla}
+  X.~Wang et al., ``$\Omega$-QVLA: Robust Quantization for Vision-Language-Action Models
+  via Composite Rotation and Per-step Scaling,'' \textit{arXiv:2605.28803}, 2026.
+
+\bibitem{dyqvla}
+  Z.~Zheng et al., ``DyQ-VLA: Temporal-Dynamic-Aware Quantization for Embodied
+  Vision-Language-Action Models,'' \textit{arXiv:2603.07904}, 2026.
+
+\end{thebibliography}
+
+\end{document}

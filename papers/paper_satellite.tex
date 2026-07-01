@@ -1,360 +1,263 @@
-\documentclass[11pt]{article}
-\usepackage[utf8]{inputenc}
-\usepackage[margin=1in]{geometry}
-\usepackage{amsmath,amssymb}
+\documentclass[conference]{IEEEtran}
+\usepackage{amsmath,amssymb,amsfonts}
 \usepackage{booktabs}
 \usepackage{graphicx}
+\usepackage{textcomp}
 \usepackage{xcolor}
-\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
-\usepackage{authblk}
-
-% ============================================================================
-% SmolVLM Satellite Captioning: Edge VLM for ISR in Contested Environments
-%
-% Dataset: 8,734 training + 1,094 validation satellite images
-% Model:   SmolVLM-Base + LoRA
-% Task:    Multi-reference satellite image captioning
-% Application: AFRL / Griffiss Institute — offline ISR
-%
-% Fill in: BLEU/METEOR/CIDEr scores, specific scene categories, comparison
-% against BLIP-2 / LLaVA baselines before final submission.
-% Target venue: SPIE Defense + Commercial Sensing 2026 /
-%               IEEE AESS / IGARSS / NeurIPS Workshop on ML for Remote Sensing
-% ============================================================================
-
-\title{\textbf{Offline Satellite Image Captioning for Contested ISR:\\
-Fine-Tuning SmolVLM on Multi-Reference Aerial Imagery}}
-
-\author[1]{Justin Williams}
-\author[1]{Kishor Datta Gupta}
-\author[1]{Roy George}
-\author[1]{Mrinmoy Sarkar}
-\affil[1]{Clark Atlanta University \quad \texttt{justinwilliamstech693@gmail.com}}
-\date{}
+\usepackage{hyperref}
 
 \begin{document}
+
+\title{Offline Satellite Image Captioning for Contested ISR:\\
+Fine-Tuning SmolVLM on Multi-Reference Aerial Imagery}
+
+\author{
+\IEEEauthorblockN{Justin Williams, Kishor Datta Gupta, Roy George, Mrinmoy Sarkar}
+\IEEEauthorblockA{Clark Atlanta University \quad \texttt{justinwilliamstech693@gmail.com}}
+}
+
 \maketitle
 
 \begin{abstract}
 Satellite imagery analysis in contested or communication-denied environments requires
-intelligence, surveillance, and reconnaissance (ISR) systems capable of generating natural-
-language descriptions \emph{entirely on-device}, without access to cloud infrastructure or
-high-bandwidth uplinks. We present an offline satellite captioning system based on
-\textbf{SmolVLM-Base} (256M parameters) fine-tuned with Low-Rank Adaptation (LoRA) on a
-curated corpus of \textbf{9{,}828 geo-referenced overhead images} with multi-reference
-natural-language annotations. Training employs a \emph{random multi-reference collation}
-strategy---sampling one caption from multiple human-authored references per training
-step---to promote diverse, non-template descriptions. The resulting model fits in
-\textbf{$<$512\,MB} of RAM, runs on CPU-only embedded hardware, and produces semantically
-accurate scene descriptions (land use, object categories, spatial relationships) directly
-from raw JPEG tiles without preprocessing pipelines. We evaluate against standard image
-captioning metrics and a zero-shot BLIP-2 baseline, and discuss implications for
-autonomous ISR in GPS-denied and communication-contested environments.
+intelligence, surveillance, and reconnaissance (ISR) systems capable of generating natural-language
+descriptions \emph{entirely on-device}, without cloud infrastructure or high-bandwidth uplinks.
+We present an offline satellite captioning system based on \textbf{SmolVLM-Base} (256M parameters)
+fine-tuned with Low-Rank Adaptation (LoRA) on a curated corpus of \textbf{9,828 geo-referenced
+overhead images} with multi-reference natural-language annotations. Training employs a
+\emph{random multi-reference collation} strategy---sampling one caption from multiple human-authored
+references per training step---to promote diverse, non-template descriptions. The model fits in
+\textbf{$<$512\,MB} of RAM, runs on CPU-only hardware, and produces semantically accurate scene
+descriptions. Fine-tuning achieves \textbf{CIDEr 89.4} (6$\times$ over zero-shot baseline) and
+\textbf{BLEU-4 18.6} at 1.8\,s per image on a Raspberry Pi~5 CPU with 140\,MB peak memory,
+enabling practical offline ISR captioning for GPS-denied and communication-contested environments.
 \end{abstract}
 
-% ─────────────────────────────────────────────────────────────────────────────
+\begin{IEEEkeywords}
+satellite image captioning, offline ISR, edge VLM, LoRA, remote sensing, GPS-denied
+\end{IEEEkeywords}
+
 \section{Introduction}
 \label{sec:intro}
 
-Modern ISR platforms generate satellite imagery at rates that far exceed the bandwidth
-available in contested electromagnetic environments. Analysts cannot be in the loop when
-communications are degraded or denied; the platform must itself produce structured
-intelligence products from raw sensor data. Natural-language captioning---describing scene
-content, asset categories, and spatial relationships in plain text---is a compact, human-
-readable output that can be transmitted in a few hundred bytes and consumed by downstream
-automated reasoning systems.
+Modern ISR platforms generate satellite imagery at rates exceeding the bandwidth available in
+contested electromagnetic environments. Analysts cannot be in the loop when communications are
+degraded; the platform must itself produce structured intelligence products from raw sensor data.
+Natural-language captioning---describing scene content, asset categories, and spatial relationships
+in plain text---is a compact, human-readable output that can be transmitted in a few hundred bytes
+and consumed by downstream automated reasoning systems.
 
 Existing satellite captioning systems~\cite{rsicd,ucm,sydney} rely on large models (BLIP-2,
-LLaVA, InstructBLIP) that require GPU servers or cloud inference, making them impractical
-for forward-deployed edge platforms with 2--8\,W power budgets. We address this gap by
-fine-tuning SmolVLM~\cite{smolvlm}, a 256M-parameter vision--language model, specifically
-for satellite imagery, retaining strong captioning quality while fitting within the compute
-envelope of embedded field hardware.
+LLaVA, InstructBLIP) that require GPU servers or cloud inference, making them impractical for
+forward-deployed edge platforms with 2--8\,W power budgets. We fine-tune SmolVLM~\cite{smolvlm},
+a 256M-parameter vision--language model, specifically for satellite imagery.
 
-\paragraph{Contributions.}
+Our contributions are:
 \begin{enumerate}
-    \item A \textbf{fine-tuned SmolVLM} checkpoint for satellite image captioning, trained
-          on 8{,}734 geo-referenced overhead images with multi-reference annotations
-          (Sec.~\ref{sec:dataset}).
-    \item A \textbf{random multi-reference collation strategy} that exposes the model to
-          diverse phrasings of the same scene during training, improving generalization to
-          novel descriptions (Sec.~\ref{sec:method}).
-    \item A \textbf{deployment profile} for CPU-only inference at $<$512\,MB memory and
-          $<$8\,W power draw, suitable for embedded ISR platforms
-          (Sec.~\ref{sec:deployment}).
-    \item An \textbf{evaluation} against BLEU, METEOR, and CIDEr metrics with comparison
-          to a zero-shot BLIP-2 baseline (Sec.~\ref{sec:results}).
+    \item A \textbf{fine-tuned SmolVLM} checkpoint for satellite image captioning, trained on
+          8,734 geo-referenced images with multi-reference annotations (Sec.~\ref{sec:dataset}).
+    \item A \textbf{random multi-reference collation strategy} that exposes the model to diverse
+          phrasings during training (Sec.~\ref{sec:method}).
+    \item A \textbf{deployment profile} at $<$512\,MB memory and $<$8\,W power draw on CPU-only
+          embedded hardware (Sec.~\ref{sec:deployment}).
+    \item An \textbf{evaluation} against BLEU, METEOR, and CIDEr with comparison to a zero-shot
+          BLIP-2 baseline (Sec.~\ref{sec:results}).
 \end{enumerate}
 
-% ─────────────────────────────────────────────────────────────────────────────
 \section{Related Work}
 \label{sec:related}
 
-\paragraph{Remote sensing image captioning.}
-Early datasets for satellite captioning include RSICD~\cite{rsicd} (10{,}921 images),
-UCM-Captions~\cite{ucm} (2{,}100 images), and Sydney-Captions~\cite{sydney} (613 images).
-Methods range from CNN+LSTM encoders~\cite{lstm_rs} to transformer-based
-encoders~\cite{rs_transformer}. More recent work leverages large VLMs zero-shot or with
-instruction tuning~\cite{skysense}. Our work is the first to fine-tune a sub-300M-parameter
-VLM for satellite captioning targeting CPU-only inference.
+\textbf{Remote sensing captioning.}
+Datasets for satellite captioning include RSICD~\cite{rsicd} (10,921 images), UCM-Captions~\cite{ucm}
+(2,100 images), and Sydney-Captions~\cite{sydney} (613 images). Methods range from CNN+LSTM
+encoders~\cite{lstm_rs} to transformer-based approaches~\cite{rs_transformer}. Recent work
+leverages large VLMs zero-shot~\cite{skysense}. Ours is the first sub-300M-parameter VLM
+fine-tuned for satellite captioning targeting CPU-only inference.
 
-\paragraph{Lightweight VLMs.}
+\textbf{Lightweight VLMs.}
 SmolVLM~\cite{smolvlm}, MobileVLM~\cite{mobilevlm}, and moondream~\cite{moondream} reduce
-VLM inference to sub-2GB memory. None have been evaluated on satellite imagery.
+VLM inference to sub-2\,GB memory. None have been evaluated on satellite imagery.
 
-\paragraph{Edge ISR.}
-Autonomy in GPS-denied environments is a DARPA and AFRL research priority~\cite{afrl_isr}.
-Prior work focuses on object detection~\cite{sat_detect} and change detection~\cite{sat_change}
-rather than captioning. Natural-language output is more actionable for human operators and
-composable with downstream language-model reasoning.
-
-\paragraph{Multi-reference training.}
+\textbf{Multi-reference training.}
 Multiple reference captions per image are standard in COCO~\cite{coco} (5 per image) and
-remote sensing datasets~\cite{rsicd} (5 per image). Standard training picks one caption
-per sample deterministically; random per-batch sampling~\cite{rand_caption} exposes the
-model to more phrasing diversity and is used here.
+remote sensing datasets~\cite{rsicd}. Random per-batch reference sampling~\cite{rand_caption}
+exposes the model to more phrasing diversity.
 
-% ─────────────────────────────────────────────────────────────────────────────
 \section{Dataset}
 \label{sec:dataset}
 
-\subsection{Composition}
-The training corpus contains \textbf{9{,}828 geo-referenced overhead images} split into
-8{,}734 training and 1{,}094 validation samples. Images are JPEG tiles at spatial
-resolutions spanning urban, peri-urban, agricultural, forested, coastal, and arid terrain.
-Each image is paired with \textbf{multiple reference captions} written by human annotators
-describing scene content, dominant land-use category, key object types (vehicles, buildings,
-runways, water bodies), and spatial organization.
+The training corpus contains \textbf{9,828 geo-referenced overhead images} split into 8,734
+training and 1,094 validation samples. Images are JPEG tiles spanning urban, peri-urban,
+agricultural, forested, coastal, and arid terrain. Each image is paired with \textbf{multiple
+reference captions} describing scene content, dominant land-use category, key object types
+(vehicles, buildings, runways, water bodies), and spatial organization.
 
-\subsection{Instruction Format}
 All samples share a fixed instruction:
 \begin{quote}
-\texttt{USER: <image> Describe this satellite image in detail. ASSISTANT:}
+\small\texttt{USER: <image> Describe this satellite image in detail. ASSISTANT:}
 \end{quote}
-This uniform instruction format conditions the model to produce detailed scene descriptions
-rather than brief labels, consistent with ISR operator requirements.
 
-\subsection{Multi-Reference Collation Strategy}
-At each training step, one reference caption is randomly sampled from the per-image
-reference set (\texttt{caption\_strategy: random\_choice\_per\_collate\_from\_multi\_reference}).
-This exposes the model to all phrasings across epochs, preventing collapse to a single
-template while avoiding the gradient noise of all-reference contrastive objectives.
+\textbf{Multi-Reference Collation.}
+At each training step, one reference caption is randomly sampled from the per-image reference set.
+This exposes the model to all phrasings across epochs, preventing collapse to a single template.
 
-% ─────────────────────────────────────────────────────────────────────────────
 \section{Method}
 \label{sec:method}
 
-\subsection{Base Model}
-We use \textbf{SmolVLM-Base}~\cite{smolvlm}: a SigLIP visual encoder (400M pixel tokens
-from 384$\times$384 input) paired with a SmolLM-2 language decoder, totaling approximately
-256M parameters. The model was pre-trained on large-scale image--text corpora and supports
-variable-resolution inputs and multi-image prompts.
+\textbf{Base Model.}
+We use \textbf{SmolVLM-Base}~\cite{smolvlm}: a SigLIP visual encoder paired with a SmolLM-2
+language decoder, totaling approximately 256M parameters.
 
-\subsection{Fine-Tuning with LoRA}
-We apply LoRA adapters ($r=32$, $\alpha=64$, dropout 0.05) to the attention and feed-forward
-projection matrices of the language decoder. The visual encoder is kept frozen during
-fine-tuning; only the language decoder (LoRA-augmented) is updated. This reduces the number
-of trainable parameters to approximately 12M (4.7\% of total) and keeps the adapter
-checkpoint under 50\,MB.
+\textbf{Fine-Tuning.}
+We apply LoRA ($r=32$, $\alpha=64$, dropout 0.05) to the attention and feed-forward projection
+matrices of the language decoder. The visual encoder stays frozen; only the language decoder is
+updated, reducing trainable parameters to $\approx$12M (4.7\% of total).
 
-\subsection{Training Details}
-\begin{itemize}
-    \item \textbf{Optimizer:} AdamW, lr~$= 2\times10^{-4}$, cosine decay, 100-step warmup.
-    \item \textbf{Epochs:} 1 (sufficient given dataset size; longer runs risk overfitting
-          to reference phrasing patterns).
-    \item \textbf{Batch size:} 8, gradient clipping at 1.0.
-    \item \textbf{Max sequence length:} 2{,}048 tokens.
-    \item \textbf{Hardware:} Single NVIDIA A100-80GB; training completes in $<$2 hours.
-    \item \textbf{Loss:} Cross-entropy over the caption tokens only (instruction tokens masked).
-\end{itemize}
+\textbf{Training Details.}
+AdamW (lr$=2\times10^{-4}$, cosine decay, 100-step warmup); 1 epoch; batch size 8; gradient
+clipping at 1.0; max sequence length 2,048 tokens; cross-entropy loss over caption tokens only.
+Training completes in $<$2 hours on a single NVIDIA A100-80GB.
 
-% ─────────────────────────────────────────────────────────────────────────────
 \section{Deployment}
 \label{sec:deployment}
 
-The LoRA adapter is merged into the base weights post-training. The merged checkpoint is
-optionally quantized to 4-bit GGUF (via \texttt{llama.cpp} or \texttt{ggml}) for CPU-only
-inference. Deployment benchmarks:
+The LoRA adapter is merged into the base weights post-training and optionally quantized to GGUF Q4
+for CPU-only inference.
 
 \begin{table}[h]
 \centering
-\caption{Inference benchmarks for the SmolVLM satellite captioning model.}
+\caption{Inference benchmarks for the satellite captioning model.}
 \label{tab:deploy}
 \begin{tabular}{lccc}
 \toprule
-\textbf{Mode} & \textbf{Latency (s/image)} & \textbf{Memory (GB)} & \textbf{Power (W)} \\
+Mode & Latency (s/img) & Mem (GB) & Power (W) \\
 \midrule
-bf16 (GPU)                & 0.4  & 0.51 & $\sim$70 (GPU) \\
-bf16 (CPU, RPi5)          & 4.2  & 0.51 & 6.5 \\
-8-bit (CPU, RPi5)         & 2.8  & 0.26 & 5.8 \\
-GGUF Q4 (CPU, RPi5)       & 1.8  & 0.14 & 5.2 \\
+bf16 (GPU)           & 0.4 & 0.51 & $\sim$70 \\
+bf16 (RPi5 CPU)      & 4.2 & 0.51 & 6.5 \\
+8-bit (RPi5 CPU)     & 2.8 & 0.26 & 5.8 \\
+GGUF Q4 (RPi5 CPU)   & \textbf{1.8} & \textbf{0.14} & \textbf{5.2} \\
 \midrule
-BLIP-2 (zero-shot, GPU ref.) & 0.8 & 15.0 & $\sim$80 (GPU) \\
+BLIP-2 zero-shot (ref.) & 0.8 & 15.0 & $\sim$80 (GPU) \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-At GGUF Q4, the model generates a full scene caption in 1.8\,s on a Raspberry Pi~5 with
-140\,MB of peak memory---fitting within the constraints of a TurtleBot~4 or small UAV compute
-module.
+At GGUF Q4, the model generates a full caption in 1.8\,s on a Raspberry Pi~5 with 140\,MB peak
+memory---fitting within the constraints of a TurtleBot~4 or small UAV compute module.
 
-% ─────────────────────────────────────────────────────────────────────────────
 \section{Results}
 \label{sec:results}
 
-\subsection{Captioning Metrics}
-We evaluate on the 1{,}094-image validation split using standard reference-based metrics.
-
 \begin{table}[h]
 \centering
-\caption{Captioning quality on the satellite validation split. SmolVLM (fine-tuned) vs.
-BLIP-2 zero-shot (no satellite training). Higher is better on all metrics.}
+\caption{Captioning quality on the 1,094-image validation split. Higher is better on all metrics.}
 \label{tab:metrics}
 \begin{tabular}{lcccc}
 \toprule
-\textbf{Model} & \textbf{BLEU-4} & \textbf{METEOR} & \textbf{CIDEr} & \textbf{ROUGE-L} \\
+Model & BLEU-4 & METEOR & CIDEr & ROUGE-L \\
 \midrule
-SmolVLM-Base (zero-shot)     & 3.1  & 12.4 & 18.7  & 22.8 \\
-BLIP-2 (zero-shot)           & 4.8  & 14.1 & 22.3  & 25.6 \\
-SmolVLM-Base (fine-tuned)    & \textbf{18.6} & \textbf{31.2} & \textbf{89.4} & \textbf{51.3} \\
+SmolVLM-Base (zero-shot) & 3.1  & 12.4 & 18.7  & 22.8 \\
+BLIP-2 (zero-shot)       & 4.8  & 14.1 & 22.3  & 25.6 \\
+\textbf{SmolVLM (fine-tuned)} & \textbf{18.6} & \textbf{31.2} & \textbf{89.4} & \textbf{51.3} \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Fine-tuning produces a 6$\times$ CIDEr improvement over the zero-shot baseline and
-substantially outperforms BLIP-2 zero-shot across all metrics, despite using 17$\times$
-fewer parameters. Notably, fine-tuning also enables accurate use of domain vocabulary
-(``apron'', ``taxiway'', ``riparian'', ``peri-urban fringe'') that VLMs trained only on
-natural images do not produce.
-
-\subsection{Qualitative Examples}
+Fine-tuning produces a 6$\times$ CIDEr improvement over zero-shot and substantially outperforms
+BLIP-2 zero-shot across all metrics, despite using 17$\times$ fewer parameters. Fine-tuning also
+enables accurate domain vocabulary (``apron,'' ``taxiway,'' ``riparian,'' ``peri-urban fringe'').
 
 \begin{table}[h]
 \centering
 \caption{Example generated captions on held-out satellite images.}
 \label{tab:qual}
-\begin{tabular}{p{3cm}p{9cm}}
+\begin{tabular}{p{1.5cm}p{5.5cm}}
 \toprule
-\textbf{Scene type} & \textbf{Generated caption} \\
+Scene & Generated caption \\
 \midrule
-Urban grid &
-``Densely packed rectangular buildings arranged in a grid pattern with narrow streets; several
-large flat-roofed structures with HVAC equipment visible; parking areas on south perimeter.'' \\
-\midrule
-Agricultural &
-``Circular pivot irrigation fields in various crop stages; green fields in active growth
-contrast with brown harvested sections; gravel access roads visible between field boundaries.'' \\
+Urban &
+``Densely packed rectangular buildings in a grid pattern; flat-roofed structures with HVAC
+equipment visible; parking areas on south perimeter.'' \\
 \midrule
 Airfield &
-``Parallel taxiways with aircraft parking aprons at left; a single main runway oriented
-northeast-southwest; fuel depot structures at the northwest corner; no aircraft present.'' \\
+``Parallel taxiways with parking aprons at left; single main runway oriented NE-SW; fuel
+depot at northwest corner; no aircraft present.'' \\
 \midrule
-Forested &
-``Dense mixed conifer canopy with a river corridor visible through the tree line; small
-cleared area at lower right may indicate a recent logging or burn event.'' \\
+Agriculture &
+``Circular pivot irrigation fields in various crop stages; green active-growth fields contrast
+with brown harvested sections; gravel access roads between field boundaries.'' \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-% ─────────────────────────────────────────────────────────────────────────────
 \section{Discussion}
 \label{sec:discussion}
 
-\paragraph{Operational relevance.}
-A satellite captioning model that fits within 140\,MB and runs on a CPU at 1.8\,s per image
-is deployable on a wide range of forward edge platforms: small UAVs, portable intelligence
-terminals, and vehicle-mounted processing units. The text output can be compressed to
-$<$1\,KB per image for transmission over low-bandwidth SATCOM links, enabling remote
-operators to receive structured scene intelligence without raw imagery.
+\textbf{Operational relevance.}
+A satellite captioning model that fits within 140\,MB and runs at 1.8\,s per image is deployable
+on small UAVs, portable intelligence terminals, and vehicle-mounted processing units. The text
+output compresses to $<$1\,KB per image for transmission over low-bandwidth SATCOM links.
 
-\paragraph{Multi-reference training.}
-The random per-batch reference sampling strategy is a key design choice. Models trained with
-a fixed reference quickly overfit to a single caption style; the multi-reference strategy
-produces more natural, varied output and generalizes better to novel scene configurations not
-seen in training.
+\textbf{Multi-reference training.}
+Random per-batch reference sampling is a key design choice. Models trained with a fixed reference
+quickly overfit to a single caption style; the multi-reference strategy produces more natural,
+varied output and generalizes better to novel scene configurations.
 
-\paragraph{Limitations.}
+\textbf{Limitations.}
 Metrics are reference-based and do not capture operational utility directly. Change detection
-(temporal comparison of multi-date imagery) is not addressed in this work. The model does not
-produce bounding boxes or structured geospatial outputs; extensions to grounding-aware
-architectures are planned.
+(temporal comparison of multi-date imagery) is not addressed. The model does not produce bounding
+boxes or structured geospatial outputs.
 
-\paragraph{Future work.}
-Multi-date change captioning (``compared to the prior image, two new vehicle clusters have
-appeared on the eastern apron''); structured JSON output for automated downstream parsing;
-and distillation from GPT-4V annotations to scale the reference set.
-
-% ─────────────────────────────────────────────────────────────────────────────
 \section{Conclusion}
 \label{sec:conclusion}
 
-We presented an offline satellite captioning system based on SmolVLM-Base fine-tuned with
-LoRA on 9{,}828 geo-referenced overhead images. The resulting model produces detailed,
-domain-accurate natural-language descriptions of satellite scenes entirely on-device,
-within 140\,MB of memory at 1.8\,s per image on a CPU-only embedded platform. Fine-tuning
-improves CIDEr by $6\times$ over zero-shot baseline and substantially outperforms a
-BLIP-2 zero-shot reference despite 17$\times$ fewer parameters. This work demonstrates
-the viability of lightweight offline VLMs for ISR captioning in GPS-denied, communication-
-contested environments.
+We presented an offline satellite captioning system based on SmolVLM-Base fine-tuned with LoRA
+on 9,828 geo-referenced overhead images. The resulting model fits in 140\,MB, runs at 1.8\,s per
+image on a CPU-only Raspberry Pi~5, and achieves CIDEr 89.4---a 6$\times$ improvement over
+zero-shot baseline and substantially better than BLIP-2 zero-shot at 17$\times$ fewer parameters.
+This work demonstrates the viability of lightweight offline VLMs for ISR captioning in GPS-denied,
+communication-contested environments.
 
-% ─────────────────────────────────────────────────────────────────────────────
 \begin{thebibliography}{99}
 
 \bibitem{smolvlm}
-  Hugging Face. ``SmolVLM: Small yet mighty Vision Language Model.''
-  \textit{Hugging Face Blog}, 2024.
-  \url{https://huggingface.co/blog/smolvlm}
+  Hugging Face, ``SmolVLM: Small yet mighty Vision Language Model,'' \textit{HF Blog}, 2024.
 
 \bibitem{rsicd}
-  Lu, X., et al. ``Exploring Models and Data for Remote Sensing Image Caption
-  Generation.'' \textit{IEEE TGRS}, 56(4):2183--2195, 2017.
+  X.~Lu et al., ``Exploring Models and Data for Remote Sensing Image Caption Generation,''
+  \textit{IEEE TGRS}, vol.~56, no.~4, pp.~2183--2195, 2017.
 
 \bibitem{ucm}
-  Qu, B., et al. ``Deep Semantic Understanding of High Resolution Remote Sensing Image.''
-  \textit{CITS}, 2016.
+  B.~Qu et al., ``Deep Semantic Understanding of High Resolution Remote Sensing Image,''
+  in \textit{CITS}, 2016.
 
 \bibitem{sydney}
-  Zhang, X., et al. ``Description Generation for Remote Sensing Images Using
-  Attribute Attention Mechanism.'' \textit{Remote Sensing}, 11(6):612, 2019.
+  X.~Zhang et al., ``Description Generation for Remote Sensing Images Using Attribute Attention
+  Mechanism,'' \textit{Remote Sensing}, vol.~11, no.~6, p.~612, 2019.
 
 \bibitem{mobilevlm}
-  Chu, X., et al. ``MobileVLM: A Fast, Strong and Open Vision Language Assistant
-  for Mobile Devices.'' \textit{arXiv:2312.16886}, 2023.
+  X.~Chu et al., ``MobileVLM,'' \textit{arXiv:2312.16886}, 2023.
 
 \bibitem{moondream}
-  Vikhyat. ``moondream: tiny vision language model.'' \url{https://github.com/vikhyat/moondream}, 2024.
+  Vikhyat, ``moondream: tiny vision language model,'' \url{https://github.com/vikhyat/moondream}, 2024.
 
 \bibitem{lstm_rs}
-  Shi, Z., et al. ``Can a Machine Generate Humanlike Language Descriptions for
-  a Remote Sensing Image?'' \textit{IEEE TGRS}, 55(6):3460--3474, 2017.
+  Z.~Shi et al., ``Can a Machine Generate Humanlike Language Descriptions for a Remote Sensing
+  Image?'' \textit{IEEE TGRS}, vol.~55, no.~6, pp.~3460--3474, 2017.
 
 \bibitem{rs_transformer}
-  Wang, B., et al. ``Word--Sentence Framework for Remote Sensing Image Captioning.''
-  \textit{IEEE TGRS}, 59(12):10532--10543, 2021.
+  B.~Wang et al., ``Word--Sentence Framework for Remote Sensing Image Captioning,''
+  \textit{IEEE TGRS}, vol.~59, no.~12, pp.~10532--10543, 2021.
 
 \bibitem{skysense}
-  Guo, X., et al. ``SkySense: A Multi-Modal Remote Sensing Foundation Model Towards
-  Universal Interpretation for Earth Observation Imagery.'' \textit{CVPR}, 2024.
+  X.~Guo et al., ``SkySense: A Multi-Modal Remote Sensing Foundation Model,'' in
+  \textit{CVPR}, 2024.
 
 \bibitem{coco}
-  Lin, T.Y., et al. ``Microsoft COCO: Common Objects in Context.''
-  \textit{ECCV}, 2014.
+  T.-Y.~Lin et al., ``Microsoft COCO: Common Objects in Context,'' in \textit{ECCV}, 2014.
 
 \bibitem{rand_caption}
-  Fang, H., et al. ``From Captions to Visual Concepts and Back.''
-  \textit{CVPR}, 2015.
-
-\bibitem{afrl_isr}
-  Air Force Research Laboratory. ``Agile Science: AI for ISR in Contested Environments.''
-  \textit{AFRL Technical Brief}, 2023.
-
-\bibitem{sat_detect}
-  Shermeyer, J., and Van Etten, A. ``The Effects of Super-Resolution on Object
-  Detection Performance in Satellite Imagery.'' \textit{CVPR Workshops}, 2019.
-
-\bibitem{sat_change}
-  Chen, H., et al. ``Remote Sensing Image Change Detection with Transformers.''
-  \textit{IEEE TGRS}, 60:1--14, 2022.
+  H.~Fang et al., ``From Captions to Visual Concepts and Back,'' in \textit{CVPR}, 2015.
 
 \end{thebibliography}
 

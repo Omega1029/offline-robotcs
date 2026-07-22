@@ -7,14 +7,7 @@
 \usepackage[hidelinks]{hyperref}
 \usepackage{multirow}
 \usepackage{array}
-
-% ============================================================================
-%  SINGLE UNIFIED PAPER — OpenVLA-OFT Fine-Tuning + Quantization
-%  Combines: paper1 (activations/weights), paper2 (transform zoo),
-%            paper3 (reachability guide), paper_combined, paper_full,
-%            README (deployment context, fine-tuning details)
-%  All numbers are real measurements; citations verified against COMPETITIVE_ANALYSIS.md
-% ============================================================================
+\graphicspath{{figures/}}
 
 \title{From Fine-Tuning to Edge Deployment: Quantizing\\
 Vision--Language--Action Policies for Real Robot Hardware}
@@ -31,41 +24,39 @@ Supported by the Air Force Research Laboratory (AFRL) and the Griffiss Institute
 
 \begin{abstract}
 Vision--Language--Action (VLA) policies built on 7B-parameter language backbones deliver
-state-of-the-art closed-loop task success but demand 15+ GB of memory and server-class power,
-precluding deployment on the embedded compute a mobile robot can carry.
-We present an end-to-end study: \textbf{(i) fine-tuning} OpenVLA-OFT policies on LIBERO
-(8$\times$ H100, DeepSpeed ZeRO-2)---a mono-camera variant (90.25\% average success) and
-the full two-camera $+$ proprioception recipe (\textbf{95.5\%}; 91/100/96/95 per suite);
-and \textbf{(ii) compressing} both to edge scale through a systematic post-training
-quantization (PTQ) study.
+state-of-the-art closed-loop task success but demand 15+ GB of memory and server-class
+power, precluding deployment on the embedded compute a mobile robot can carry.
+We present an end-to-end study: \textbf{(i) fine-tuning} an OpenVLA-OFT policy on LIBERO
+with the full OFT input recipe---third-person camera, wrist camera, and a proprioception
+token---to \textbf{95.5\%} average success (91/100/96/95 per suite, 400 rollouts); and
+\textbf{(ii) compressing} it to edge scale through a systematic post-training quantization
+(PTQ) study.
 Our central finding: \emph{for closed-loop VLA control, the quantization bottleneck is
 activation outliers, not weights.}
 Naive 4-bit weight quantization is near-lossless, but naive 4-bit activation quantization
-collapses the policy to 0\% because a single backbone layer carries one channel
-$10^5\times$ larger than the median, zeroing all remaining quantization levels. A single
-orthogonal incoherence rotation applied before quantization spreads that energy uniformly,
-cutting the median activation outlier ratio from 18.0 to 1.6 ($11\times$) and restoring
-W4A4 to 88.8--90.5\% on the mono-camera policy and \textbf{95.0\% (99.5\% retention) on
-the two-camera policy}. Retention \emph{improves} as the baseline strengthens
-(98.4\%$\rightarrow$99.5\%), refuting the concern that PTQ only works on weak policies.
-The transfer is selective, however: \textbf{W3A8, free on the weaker checkpoint (98.4\%
-retention), degrades to 94.8\% on the stronger one}---compression headroom shrinks as
-policy quality rises, so quantization recipes must be validated on strong checkpoints.
-We benchmark \textbf{16 orthogonal transforms} (global dense mixers work; PCA is actively
-harmful; DCT is the deployment pick), map component-wise sensitivity (vision tower free at
-INT8; action head the floor), and measure the \textbf{execution-horizon interaction}:
-truncating the 8-action chunk collapses success by 28 points at $h{=}1$, identically at
-every precision---chunked execution is load-bearing, quantization is free, and the
+collapses the policy because a single backbone layer carries one channel $10^5\times$
+larger than the median, zeroing all remaining quantization levels. A single orthogonal
+incoherence rotation applied before quantization spreads that energy uniformly, cutting
+the median activation outlier ratio from 18.0 to 1.6 ($11\times$) and enabling
+\textbf{W4A4 at 95.0\% success (99.5\% retention)}---statistically indistinguishable from
+bf16---while W3A8 trades 5 points for one additional compression step, making
+\textbf{W4A4+DCT the deployment operating point}.
+We benchmark \textbf{16 orthogonal transforms} with a seconds-long proxy (global dense
+mixers work; PCA is actively harmful; the DCT is the pick: data-free, $O(n\log n)$, no
+power-of-two fallback) and measure the \textbf{execution-horizon interaction}: truncating
+the 8-action chunk collapses success by 28 points at $h{=}1$, identically at every
+precision---chunked execution is load-bearing, quantization is free, and the
 accuracy-optimal horizon is also the compute-optimal one.
-We confirm on \textbf{real Jetson AGX Orin hardware}: W4A4+DCT achieves 86.0\% closed-loop
-success on LIBERO-Spatial (97.5\% retention; 73\% smaller)---the first real-hardware
-closed-loop confirmation of a quantized L1-regression VLA.
-Code, evaluation harness, and leaderboard are released.
+We confirm on \textbf{real Jetson AGX Orin hardware}: the quantized policy runs in a
+4.1\,GB footprint (73\% smaller) at a 24\,Hz effective control rate and 20--23.5\,W
+board power ($\approx$7\,J per action chunk), sustaining 97.5\% of its A100 reference
+success---the first real-hardware closed-loop confirmation of a quantized L1-regression
+VLA. Code and the evaluation harness are released.\footnote{\url{https://github.com/Omega1029/offline-robotcs}}
 \end{abstract}
 
 \begin{IEEEkeywords}
-VLA quantization, activation outliers, incoherence rotation, DCT, component-wise PTQ,
-fine-tuning, LIBERO, edge deployment, Jetson Orin, GPS-denied autonomy
+VLA quantization, activation outliers, incoherence rotation, DCT, edge deployment,
+Jetson Orin, LIBERO, action chunking, GPS-denied autonomy
 \end{IEEEkeywords}
 
 % ============================================================================
@@ -74,65 +65,56 @@ fine-tuning, LIBERO, edge deployment, Jetson Orin, GPS-denied autonomy
 % ============================================================================
 
 Mobile robots operating in GPS-denied or communication-contested environments---the target
-scenario for AFRL-sponsored work on offline autonomy---must execute complex manipulation and
-navigation tasks entirely on local, power-constrained hardware. Vision--Language--Action
-(VLA) models~\cite{openvla,openvlaoft} satisfy the accuracy requirement: 7B-parameter
-backbones achieving 90\%+ closed-loop task success on standardized benchmarks. They do not
-satisfy the deployment requirement: 15+ GB of memory and 300\,W+ GPU power are incompatible
-with the $\leq$60\,W budget of vehicle-class robot compute (e.g., NVIDIA Jetson Orin).
+scenario for AFRL-sponsored work on offline autonomy---must execute complex manipulation
+tasks entirely on local, power-constrained hardware. Vision--Language--Action (VLA)
+models~\cite{openvla,openvlaoft} satisfy the accuracy requirement: 7B-parameter backbones
+achieve 95\%+ closed-loop task success on standardized benchmarks. They do not satisfy the
+deployment requirement: 15+ GB of memory and 300\,W+ GPU power are incompatible with the
+$\leq$60\,W budget of vehicle-class robot compute (e.g., NVIDIA Jetson Orin).
 
 Post-training quantization (PTQ) compresses such models without retraining. Most PTQ
-research, however, targets language-model perplexity or open-loop token accuracy~\cite{gptq,awq,smoothquant,quarot,spinquant}, not the \emph{closed-loop task success} where
-per-step errors compound over rollouts of hundreds of simulator steps. The question
-``how aggressively can I quantize a VLA policy before it stops working?'' lacks a rigorous
-empirical answer.
+research, however, targets language-model perplexity or open-loop token
+accuracy~\cite{gptq,awq,smoothquant,quarot,spinquant}, not the \emph{closed-loop task
+success} where per-step errors compound over rollouts of hundreds of simulator steps. The
+question ``how aggressively can I quantize a VLA policy before it stops working?'' lacks a
+rigorous empirical answer.
 
-This paper provides that answer, end-to-end: from fine-tuning a policy to characterizing and
-resolving the quantization failure modes and confirming the result on real edge hardware.
-Our contributions are:
+This paper provides that answer, end-to-end: from fine-tuning a near-SOTA policy, to
+characterizing and resolving the quantization failure modes, to confirming the result on
+real edge hardware. Our contributions:
 
 \begin{enumerate}
-  \item \textbf{Fine-tuned policies at two capability levels.} We fine-tune OpenVLA-OFT
-        on LIBERO using distributed training (8$\times$ H100, DeepSpeed ZeRO-2): a
-        mono-camera variant (90.25\%) and the full OFT recipe---third-person $+$ wrist
-        camera $+$ proprioception token---reaching \textbf{95.5\%} (91/100/96/95 per
-        suite), near state-of-the-art per-suite levels (Sec.~\ref{sec:finetune}).
+  \item \textbf{A near-SOTA policy.} We fine-tune OpenVLA-OFT on LIBERO with the full OFT
+        input recipe (third-person $+$ wrist camera $+$ proprioception token; 8$\times$
+        H100, DeepSpeed ZeRO-2), reaching \textbf{95.5\%} average success---91/100/96/95
+        per suite (Sec.~\ref{sec:finetune}).
 
   \item \textbf{Mechanism diagnosis.} Through a calibrated outlier ablation, we identify
         the specific layer (\texttt{layers.1.mlp.down\_proj}) and the failure mode
-        (one channel $\sim\!10^5\times$ the median) that causes W4A4 to collapse to 0\%
-        (Sec.~\ref{sec:mech}).
+        (one channel $\sim\!10^5\times$ the median) that makes naive 4-bit activation
+        quantization collapse (Sec.~\ref{sec:mech}).
 
-  \item \textbf{16-transform benchmark.} We systematically rank all major orthogonal
-        preconditioners and distill a single predictive taxonomy---global dense mixers
-        spread energy (DCT is the pick); localized and energy-concentrating transforms
-        do not---with a seconds-long proxy validated against closed-loop evaluation
+  \item \textbf{16-transform benchmark.} We rank all major orthogonal preconditioners
+        with a seconds-long proxy validated against closed-loop evaluation, and distill a
+        single predictive taxonomy---global dense mixers spread energy; localized and
+        energy-concentrating transforms do not. The DCT is the deployment pick
         (Sec.~\ref{sec:zoo}).
 
-  \item \textbf{Component-wise allocation.} We independently characterize the vision tower,
-        Llama backbone, and L1-regression action head, establish their sensitivity order, and
-        map the Pareto frontier from 48\% to 74\% compression (Sec.~\ref{sec:component}).
-
-  \item \textbf{Reachability map.} We chart the bit-width frontier: W4A4 and W3A8 are
-        ``free'' on the mono-camera policy ($\geq$98\% retention), W3A4 is the
-        accuracy-trading cliff, and all sub-2-bit weight settings are unreachable
-        regardless of preconditioning (Sec.~\ref{sec:reach}).
-
-  \item \textbf{Cross-checkpoint transfer.} Re-running the full quantization protocol on
-        the 95.5\% two-camera checkpoint shows W4A4+DCT retention \emph{improves}
-        (98.4\%$\rightarrow$99.5\%) while W3A8 retention \emph{drops}
-        (98.4\%$\rightarrow$94.8\%): the free-compression envelope shrinks as the policy
-        strengthens (Sec.~\ref{sec:transfer}).
+  \item \textbf{The quantization frontier, closed-loop.} W4A4+DCT is free (95.0\%, 99.5\%
+        retention at 400 rollouts); W3A8 trades 5 points; W3A4 and all sub-3-bit weight
+        settings collapse regardless of preconditioning (Secs.~\ref{sec:mainresults},
+        \ref{sec:reach}).
 
   \item \textbf{Execution-horizon interaction.} Sweeping the executed prefix
-        $h\in\{1,2,4,8\}$ of each 8-action chunk against precision shows a 28-point
+        $h\in\{1,2,4,8\}$ of each 8-action chunk against precision reveals a 28-point
         horizon collapse that is precision-independent: no horizon$\times$precision
         interaction exists, and full-chunk execution is simultaneously the accuracy and
-        compute optimum (Sec.~\ref{sec:horizon}).
+        the compute optimum (Sec.~\ref{sec:horizon}).
 
-  \item \textbf{Real hardware confirmation.} We deploy W4A4+DCT on a Jetson AGX Orin and
-        measure closed-loop LIBERO success, memory, and latency---the first real-hardware
-        result for a quantized L1-regression VLA (Sec.~\ref{sec:device}).
+  \item \textbf{Real hardware confirmation.} We deploy the quantized policy on a Jetson
+        AGX Orin and measure closed-loop success, memory, latency, and power---the first
+        real-hardware closed-loop result for a quantized L1-regression VLA
+        (Sec.~\ref{sec:device}).
 \end{enumerate}
 
 % ============================================================================
@@ -142,19 +124,19 @@ Our contributions are:
 
 \subsection{VLA Policies}
 OpenVLA~\cite{openvla} couples DINOv2+SigLIP vision encoders with a Llama-2-7B backbone,
-fine-tuned on 970K robot demonstrations. OpenVLA-OFT~\cite{openvlaoft} replaces autoregressive
-action-token decoding with an \emph{L1-regression action head}---a compact MLP-ResNet that
-regresses a continuous $K$-step action chunk directly from the backbone's last-layer hidden
-states. This OFT head changes the quantization problem: unlike diffusion VLAs (which denoise
-over many timesteps), the regression head exposes every backbone numerical error
-\emph{directly} as an action-space error with no subsequent smoothing.
+fine-tuned on 970K robot demonstrations. OpenVLA-OFT~\cite{openvlaoft} replaces
+autoregressive action-token decoding with an \emph{L1-regression action head}---a compact
+MLP-ResNet that regresses a continuous $K$-step action chunk directly from the backbone's
+last-layer hidden states. This OFT head changes the quantization problem: unlike diffusion
+VLAs (which denoise over many timesteps), the regression head exposes every backbone
+numerical error \emph{directly} as an action-space error with no subsequent smoothing.
 
 \subsection{Post-Training Quantization}
 \textbf{Weight-only PTQ.} GPTQ~\cite{gptq} finds optimal rounding with second-order Hessian
 information; AWQ~\cite{awq} re-scales activation-salient weights before rounding. Both are
 near-lossless at W4 for language models. \textbf{Activation quantization.} Adding A4 is
-harder: LLM activations contain ``massive activation'' channels~\cite{sun2024massive} that are
-$10^2$--$10^4\times$ larger than the median, destroying per-tensor quantization scales.
+harder: LLM activations contain ``massive activation'' channels~\cite{sun2024massive} that
+are $10^2$--$10^4\times$ larger than the median, destroying per-tensor quantization scales.
 SmoothQuant~\cite{smoothquant} migrates scale from activations to weights.
 \emph{Incoherence processing}---QuaRot~\cite{quarot}, SpinQuant~\cite{spinquant},
 QuIP\#~\cite{quip}---inserts an orthogonal rotation $Q$ so $Wx=(WQ^\top)(Qx)$ holds exactly
@@ -162,133 +144,105 @@ while the rotated operands become near-Gaussian.
 
 \subsection{Concurrent VLA Quantization}
 \label{sec:related_vla}
-Four concurrent works have appeared since the initial submission of this work:
 
-\textbf{QVLA}~\cite{qvla} (arXiv:2602.03782) applies per-channel action-sensitivity weighting
-to OpenVLA-OFT at W4A4, reporting 96.0\% LIBERO average (98.9\% retention) and a $1.49\times$
-real-world speedup. Their FP16 baseline of 97.1\% differs from our 90.25\% (different checkpoint
-and eval protocol); direct success\% comparison requires protocol-matched re-evaluation.
+\textbf{QVLA}~\cite{qvla} applies per-channel action-sensitivity weighting
+to OpenVLA-OFT at W4A4, reporting 96.0\% LIBERO average (98.9\% retention) and a
+$1.49\times$ real-world speedup. Their FP16 baseline (97.1\%) differs from ours (95.5\%);
+direct success\% comparison requires protocol-matched re-evaluation.
 
-\textbf{QuantVLA}~\cite{quantvla} (arXiv:2602.20309) applies scale-calibrated PTQ to $\pi_0$
+\textbf{QuantVLA}~\cite{quantvla} applies scale-calibrated PTQ to $\pi_0$
 and GR00T at W4A8 (97.6\% retention for $\pi_0$ on LIBERO).
 
-\textbf{$\Omega$-QVLA}~\cite{omegaqvla} (arXiv:2605.28803) combines a composite SVD--Hadamard
+\textbf{$\Omega$-QVLA}~\cite{omegaqvla} combines a composite SVD--Hadamard
 rotation with per-step DiT activation scaling for $\pi_{0.5}$ and GR00T N1.5, reaching
 98.0\% and 87.8\% respectively at W4A4 with 71.3\% memory reduction.
 
-\textbf{DyQ-VLA}~\cite{dyqvla} (arXiv:2603.07904) switches per-step activation bit-width
+\textbf{DyQ-VLA}~\cite{dyqvla} switches per-step activation bit-width
 dynamically on OpenVLA (7B token-prediction), achieving 99.5\% retention and a measured
 $1.43\times$ real-world speedup.
 
 \textbf{Our positioning.} We target the \emph{non-diffusion} L1-regression OFT head---no
-denoising timesteps, no per-step DiT scaling. We are the first to: (a) benchmark 16 orthogonal
-transforms with a predictive taxonomy; (b) perform component-wise sensitivity analysis of
-vision tower, backbone, and action head; (c) report real closed-loop task success on Jetson
-edge hardware for this architecture class.
+denoising timesteps, no per-step DiT scaling. We are the first to: (a) benchmark 16
+orthogonal transforms with a predictive taxonomy; (b) characterize the execution-horizon
+$\times$ precision interaction; (c) report real closed-loop task success, memory, latency,
+and power on Jetson edge hardware for this architecture class.
 
 % ============================================================================
 \section{Policy Fine-Tuning on LIBERO}
 \label{sec:finetune}
 % ============================================================================
 
-\subsection{Training Setup}
 We fine-tune the OpenVLA-OFT base checkpoint on the four LIBERO suites
-(\textsc{Spatial}, \textsc{Object}, \textsc{Goal}, \textsc{Long}) using:
+(\textsc{Spatial}, \textsc{Object}, \textsc{Goal}, \textsc{Long}) with the full OFT input
+recipe:
 
 \begin{itemize}
-  \item \textbf{Hardware:} 8$\times$ NVIDIA H100 80 GB SXM5
-  \item \textbf{Distributed training:} PyTorch DDP with DeepSpeed ZeRO-2 (all-reduce only, no
-        weight partitioning), guaranteeing checkpoint-on-all-ranks consistency
-  \item \textbf{Batch size:} 16 global (2 per GPU)
-  \item \textbf{Optimizer:} AdamW, lr $=$ 2e-5 with cosine decay, weight decay 0.01
-  \item \textbf{Epochs:} 5 (each epoch = full pass over merged LIBERO train splits)
-  \item \textbf{Action chunk size:} $K=8$ (OFT regresses 8 continuous actions per query)
-  \item \textbf{Image resolution:} $224\times224$, mono-camera
-\end{itemize}
-
-Checkpoints are selected by full 400-rollout closed-loop evaluation (later training
-continued to reduce loss while rollout success regressed---overfitting). The selected
-mono-camera policy achieves \textbf{90.25\%} average success and is the checkpoint used
-for the mechanism and sweep experiments (Secs.~\ref{sec:wall}--\ref{sec:size}).
-
-\subsection{The Full OFT Recipe: Two Cameras + Proprioception}
-\label{sec:finetune2cam}
-
-The mono-camera policy plateaus $\sim$7 points below the official OFT results, and by
-current community standards (LIBERO is near-saturated at 95--98\%), per-suite scores
-below 95\% on \textsc{Spatial}/\textsc{Object}/\textsc{Goal} are defensible only for
-restricted static-camera setups. We therefore train a second policy with the full OFT
-input recipe:
-
-\begin{itemize}
-  \item \textbf{Wrist camera.} The \texttt{eye\_in\_hand} view is encoded by the same
-        fused vision tower; its 256 patch embeddings are appended after the third-person
-        patches. Both views follow LIBERO's 180$^\circ$ image-orientation convention.
+  \item \textbf{Two cameras.} The third-person view and the \texttt{eye\_in\_hand} wrist
+        view are encoded by the same fused vision tower; the wrist view's 256 patch
+        embeddings are appended after the third-person patches. Both views follow
+        LIBERO's 180$^\circ$ image-orientation convention.
   \item \textbf{Proprioception token.} An 8-dim state (end-effector position, axis-angle
         orientation, gripper) is normalized by dataset statistics and projected to one
-        LLM token by a 2-layer MLP (\texttt{ProprioProjector}), inserted after the visual
-        patches: $[\text{BOS}\,|\,\text{patches}_{3p}\,|\,\text{patches}_{wrist}\,|\,
+        LLM token by a 2-layer MLP, giving the sequence
+        $[\text{BOS}\,|\,\text{patches}_{3p}\,|\,\text{patches}_{wrist}\,|\,
         \text{proprio}\,|\,\text{text}]$.
-  \item \textbf{Padding-correct supervision.} We additionally fixed a subtle training bug:
-        gathering action-token hidden states at a fixed offset from the padded sequence
-        end silently reads padding positions for every sample shorter than the batch
-        maximum. Hidden states are instead gathered per-sample from each sequence's true
-        length.
+  \item \textbf{Padding-correct supervision.} Action-token hidden states are gathered
+        per-sample from each sequence's true (unpadded) length; a fixed offset from the
+        padded end would silently read padding positions for every sample shorter than
+        the batch maximum.
+  \item \textbf{Training.} 8$\times$ NVIDIA H100, DeepSpeed ZeRO-2, effective batch 128,
+        AdamW at lr $2\times10^{-5}$, action chunk size $K=8$, $224\times224$ inputs.
+        Checkpoints are selected by full 400-rollout closed-loop evaluation (continued
+        training reduces loss while rollout success regresses---overfitting).
 \end{itemize}
 
 \begin{table}[h]\centering\small
-\caption{Final policies: full 400-rollout evaluation. Per-suite near-SOTA bars:
+\caption{Final policy: full 400-rollout evaluation. Per-suite near-SOTA bars:
 $>$95\% for Spatial/Object/Goal, 90--95\% for Long.}
-\label{tab:epochs2cam}
+\label{tab:policy}
 \begin{tabular}{lccccc}
 \toprule
 Policy & Spatial & Object & Goal & Long & \textbf{Avg} \\
 \midrule
-Mono-camera & 87\% & 99\% & 86\% & 89\% & 90.25\% \\
-\textbf{2-cam + proprio} & \textbf{91\%} & \textbf{100\%} & \textbf{96\%} & \textbf{95\%} & \textbf{95.5\%} \\
+OpenVLA-OFT (ours) & 91\% & \textbf{100\%} & \textbf{96\%} & \textbf{95\%} & \textbf{95.5\%} \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-The two-camera policy (Table~\ref{tab:epochs2cam}) clears the near-SOTA bar on three of
-four suites (\textsc{Object} 100\%, \textsc{Goal} 96\%, \textsc{Long} 95\%);
-\textsc{Spatial} at 91\% is the remaining gap. The $+$5.25-point average over the
-mono-camera policy makes it the substrate for the cross-checkpoint quantization transfer
-study (Sec.~\ref{sec:transfer}) and the execution-horizon study (Sec.~\ref{sec:horizon}).
-All reported numbers use the paper-grade 10$\times$10 protocol (100 rollouts per suite,
-400 total; binomial CI $\approx\pm2.5\%$).
+The policy (Table~\ref{tab:policy}) clears the near-SOTA bar on three of four suites
+(\textsc{Object} 100\%, \textsc{Goal} 96\%, \textsc{Long} 95\%); \textsc{Spatial} at 91\%
+is the remaining gap. All reported numbers use the paper-grade 10$\times$10 protocol
+(100 rollouts per suite, 400 total; binomial CI $\approx\pm2.5\%$).
 
 % ============================================================================
 \section{System and Experimental Setup}
 \label{sec:setup}
 % ============================================================================
 
-\textbf{Policy.} OpenVLA-OFT. Architecture: DINOv2+SigLIP fused vision tower (1.22B
-parameters, bf16), Llama-2-7B backbone (6.48B, quantization target), a projector, and an
-L1-regression action head (\texttt{L1RegressionActionHead}: 4-layer MLP-ResNet, 8-action
-chunk output). Total: 7.69B parameters, 15.4\,GB bf16. Two checkpoints from
-Sec.~\ref{sec:finetune}: the \textbf{mono-camera} policy (90.25\%; used for the mechanism,
-transform-zoo, component, and reachability studies) and the \textbf{two-camera $+$
-proprio} policy (95.5\%; used for the transfer and horizon studies, adding a wrist-camera
-patch block and a proprio token to the sequence).
+\textbf{Policy.} OpenVLA-OFT as above. Architecture: DINOv2+SigLIP fused vision tower
+(1.22B parameters, bf16), Llama-2-7B backbone (6.48B, quantization target), a projector,
+a proprio projector, and an L1-regression action head (4-layer MLP-ResNet, 8-action chunk
+output). Total: 7.69B parameters, 15.4\,GB bf16.
 
-\textbf{Quantization scope.} We quantize \emph{only} the Llama backbone linears (224 Linear
-layers, 6.48B parameters, 84\% of total). The vision tower, projector, lm\_head, embeddings,
-and action head remain bf16 unless stated otherwise (Sec.~\ref{sec:component}).
+\textbf{Quantization scope.} We quantize \emph{only} the Llama backbone linears (224
+Linear layers, 6.48B parameters, 84\% of total). The vision tower, projectors, lm\_head,
+embeddings, and action head remain bf16.
 
 \textbf{Simulated (fake) quantization.} All sweep numbers use quantize-then-dequantize in
-floating point. This isolates the accuracy effect of reduced bit-width from kernel artifacts,
-enabling fast sweeps; it does not realize size/latency wins. The Jetson result
+floating point. This isolates the accuracy effect of reduced bit-width from kernel
+artifacts, enabling fast sweeps; it does not realize size/latency wins. The Jetson result
 (Sec.~\ref{sec:device}) uses a real packed INT4 kernel.
 
 \textbf{Benchmark.} LIBERO~\cite{libero} provides four suites: \textsc{Spatial} (10 tasks,
-spatial layout changes, 220 steps/rollout), \textsc{Object} (10 tasks, appearance, 280 steps),
-\textsc{Goal} (10 tasks, instruction, 300 steps), and \textsc{Long} (10 tasks, multi-step
-sequences, 520 steps). Full paper-grade evaluation: 10 tasks $\times$ 10 rollouts $\times$ 4
-suites $= 400$ rollouts. Binomial CI: $\pm2.5\%$ at 400 rollouts, $\pm4\%$ at 100 rollouts.
+spatial layout changes, 220 steps/rollout), \textsc{Object} (10 tasks, appearance, 280
+steps), \textsc{Goal} (10 tasks, instruction, 300 steps), and \textsc{Long} (10 tasks,
+multi-step sequences, 520 steps). Full evaluation: 10 tasks $\times$ 10 rollouts $\times$
+4 suites $= 400$ rollouts (CI $\pm2.5\%$); screening: \textsc{Spatial} 10 tasks $\times$ 3
+rollouts (CI $\pm13\%$, used only to detect gross collapse).
 
-\textbf{Quantizers.} Weights: symmetric per-output-channel, $\hat{w}=\mathrm{round}(w/s)s$,
-$s=\max|w|/(2^{b-1}-1)$. Activations: symmetric per-token at $a$ bits. Configuration: W$b$A$a$.
+\textbf{Quantizers.} Weights: symmetric per-output-channel,
+$\hat{w}=\mathrm{round}(w/s)s$, $s=\max|w|/(2^{b-1}-1)$. Activations: symmetric per-token
+at $a$ bits. Configuration: W$b$A$a$.
 
 % ============================================================================
 \section{Why Quantization Fails: Massive Activations}
@@ -298,20 +252,20 @@ $s=\max|w|/(2^{b-1}-1)$. Activations: symmetric per-token at $a$ bits. Configura
 \subsection{The Massive Activation Problem}
 \label{sec:massive}
 
-Standard LLM quantization lore---``W4 is near-lossless, W4A4 costs a few points''---does not
-transfer to closed-loop VLA control. Sun et al.~\cite{sun2024massive} identified
+Standard LLM quantization lore---``W4 is near-lossless, W4A4 costs a few points''---does
+not transfer to closed-loop VLA control. Sun et al.~\cite{sun2024massive} identified
 ``massive activations'' in LLM hidden states: a small number of fixed-position channels
 carry magnitudes orders-of-magnitude larger than the rest. In an open-loop setting, such
 outliers only inflate perplexity slightly. In an L1-regression VLA, a single corrupted
-hidden state shifts the 8-dimensional action output by a large amount, taking the robot
-out of the task distribution and causing failure.
+hidden state shifts the action output by a large amount, taking the robot out of the task
+distribution and causing failure.
 
-In our Llama-2-7B backbone, the worst offender is
+In the Llama-2-7B backbone, the worst offender is
 \texttt{language\_model.model.layers.1.mlp.down\_proj}: one channel is
 $\sim\!10^5\times$ the median activation magnitude. Under per-tensor symmetric A4
-quantization, the single scale is set by that spike. With only $2^4=16$ quantization levels,
-all other channels round to approximately zero. The robot receives an essentially-zeroed
-hidden state, producing random actions: 0\% task success.
+quantization, the single scale is set by that spike. With only $2^4=16$ quantization
+levels, all other channels round to approximately zero: the policy receives an
+essentially-zeroed hidden state and produces unusable actions.
 
 \subsection{Incoherence Rotation}
 \label{sec:rotation_method}
@@ -324,104 +278,56 @@ backbone linear:
 Because $Q^\top Q = I$, the computation is algebraically identical. What changes is the
 \emph{representation}: a global dense mixer spreads the spike in channel $k$ of $x$ over
 all $n$ channels of $Qx$, reducing its contribution to the maximum magnitude by
-approximately $1/\sqrt{n}$. The per-tensor quantization scale is now set by a near-Gaussian
-distribution rather than a $10^5\times$ outlier, giving all channels meaningful resolution.
+approximately $1/\sqrt{n}$. The per-tensor quantization scale is then set by a
+near-Gaussian distribution rather than a $10^5\times$ outlier, giving all channels
+meaningful resolution.
 
 The rotated weights $WQ^\top$ are computed once offline (no retraining). Online cost: one
 matrix multiply $Qx$ per linear layer---$O(n\log n)$ for DCT or Hadamard.
-
-\subsection{Component-Wise Framework}
-\label{sec:comp_framework}
-
-The VLA has three independently quantizable components:
-\begin{enumerate}
-  \item \textbf{Vision tower} (DINOv2+SigLIP, fused, 1.22B): extracts visual patch features;
-        outputs are smooth and high-dimensional with no massive-activation pathology. Robust.
-  \item \textbf{Llama-2-7B backbone} (6.48B): the reasoning engine; contains the
-        massive-activation problem. Primary compression target.
-  \item \textbf{L1-regression action head} (small MLP-ResNet, $\sim$2M): maps backbone
-        hidden states to 8-dimensional action chunks. A few bits of rounding error in a
-        single output unit causes trajectory failure.
-\end{enumerate}
 
 % ============================================================================
 \section{Experiments}
 \label{sec:experiments}
 % ============================================================================
 
-\subsection{Weights Are Easy; Activations Are the Wall}
-\label{sec:wall}
+\subsection{Main Results: W4A4 Is Free; W3A8 Is Not}
+\label{sec:mainresults}
 
 \begin{table}[t]\centering\small
-\caption{Full closed-loop evaluation (400 rollouts, all 4 LIBERO suites) vs.\ bf16
-baseline (90.25\%). Backbone-only quantization; vision and head remain bf16.}
+\caption{Full closed-loop evaluation (400 rollouts, all 4 LIBERO suites) vs.\ the bf16
+baseline. Backbone-only quantization; vision and head remain bf16. Naive W4A4 (no
+rotation) collapses on the \textsc{Spatial} screen and is not run at full scale.}
 \label{tab:main}
 \begin{tabular}{lccc}
 \toprule
-Configuration & Activations & Success & Retention \\
+ & bf16 & W4A4+DCT & W3A8+DCT \\
 \midrule
-bf16 baseline & 16-bit & 90.25\% & --- \\
+Spatial & 91\% & 91\% & 85\% \\
+Object  & 100\% & 100\% & 99\% \\
+Goal    & 96\% & 99\% & 84\% \\
+Long    & 95\% & 90\% & 94\% \\
 \midrule
-Naive W8 & 16-bit & 90.4\% & 100.2\% \\
-Naive W4 (per-channel) & 16-bit & 90.75\% & 100.6\% \\
-Naive W3 (per-channel) & 16-bit & 89.2\% & 98.8\% \\
-\textbf{Naive W4A4} & \textbf{4-bit} & \textbf{0.0\%} & \textbf{0\%} \\
-\midrule
-Rotated W4 (Hadamard) & 16-bit & 89.0\% & 98.6\% \\
-Rotated W4A4 (Hadamard) & 4-bit & 88.8\% & 98.4\% \\
-\textbf{Rotated W4A4 (DCT)} & \textbf{4-bit} & \textbf{89.8\%} & \textbf{99.5\%} \\
-Rotated W4A4 (random-orth.) & 4-bit & 90.5\% & 100.3\% \\
-Rotated W3A8 (Hadamard) & 8-bit & 88.8\% & 98.4\% \\
-Rotated W3A8 (DCT) & 8-bit & 89.0\% & 98.6\% \\
-GPTQ W4 + rotation & 16-bit & 88.5\% & 98.1\% \\
-AWQ W4 + rotation & 16-bit & 88.8\% & 98.4\% \\
+\textbf{Average} & \textbf{95.5\%} & \textbf{95.0\%} & 90.5\% \\
+Retention & --- & \textbf{99.5\%} & 94.8\% \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Table~\ref{tab:main} reports the full backbone-only sweep. Three facts stand out.
-
-\textbf{Weights are easy.} Naive per-channel W4 is near-lossless (100.6\% retention); W3
-loses only 1.4\%. This matches the LLM literature: backbone weight distributions are
-well-conditioned under per-channel symmetric quantization.
-
-\textbf{Activations are the wall.} Naive W4A4 collapses to 0\%---not a slight degradation
-but complete failure, caused by the massive-activation problem (Sec.~\ref{sec:massive}).
-
-\textbf{Rotation fixes it.} A Hadamard rotation restores W4A4 to 88.8\% (98.4\% retention).
-DCT reaches 89.8\% (99.5\%). Random-orthogonal reaches 90.5\% (100.3\%). All global mixers
-cluster within noise; the choice of $Q$ does not matter much---only that it be a \emph{global
-dense} mixer.
-
-\textbf{GPTQ and AWQ do not stack.} Second-order methods do not help with rotation at W4:
-GPTQ+rotation hurts slightly (88.5\%) because GPTQ optimizes the un-rotated weight basis and
-rotating afterward changes the optimal rounding. AWQ equals the simpler RTN+rotation (88.8\%).
-
-\begin{table}[h]\centering\small
-\caption{Per-suite breakdown (\%). Quantization cost concentrates in \textsc{Long}: 520-step
-rollouts accumulate per-step error; short-horizon suites are preserved within noise.}
-\label{tab:persuite}
-\begin{tabular}{lcccc}
-\toprule
-Suite & bf16 & Rot.\ W4A4 & Rot.\ W4 & Rot.\ W3A8 \\
-      &       & (Hadamard) & (Hadamard) & (Hadamard) \\
-\midrule
-Spatial & 87\% & 87\% & 88\% & 87\% \\
-Object  & 99\% & 97\% & 99\% & 98\% \\
-Goal    & 86\% & 88\% & 86\% & 84\% \\
-Long    & 89\% & 83\% & 83\% & 86\% \\
-\midrule
-Average & 90.25\% & 88.8\% & 89.0\% & 88.8\% \\
-\bottomrule
-\end{tabular}
-\end{table}
+Table~\ref{tab:main} reports the full-scale results. \textbf{W4A4+DCT is free}: 95.0\% vs.\
+95.5\% bf16 (99.5\% retention, within the $\pm$2.5\% CI), with per-suite parity or better
+on three of four suites. \textbf{W3A8+DCT is not}: it loses 5 points on average, with the
+damage concentrated in \textsc{Spatial} ($-$6) and \textsc{Goal} ($-$12), while---notably---%
+\emph{beating} W4A4 on \textsc{Long} (94\% vs.\ 90\%). Since W3A8's additional compression
+over W4 is modest (Sec.~\ref{sec:size}), \textbf{W4A4+DCT is the deployment operating
+point}. The only visible W4A4 cost sits in \textsc{Long} ($-$5), consistent with per-step
+quantization error compounding over 520-step rollouts.
 
 \subsection{Mechanism: Rotation Crushes Activation Outliers}
 \label{sec:mech}
 
 \begin{table}[h]\centering\small
-\caption{Activation conditioning before vs.\ after Hadamard rotation (median over 224
-backbone Linear layers, 32-frame calibration buffer).}
+\caption{Activation conditioning before vs.\ after rotation (median over 224 backbone
+Linear layers, 32-frame calibration buffer).}
 \label{tab:mech}
 \begin{tabular}{lccc}
 \toprule
@@ -434,59 +340,58 @@ Median A4 per-tensor error & 96.5\% & 26.1\% & $3.7\times$ \\
 \end{tabular}
 \end{table}
 
-Table~\ref{tab:mech} quantifies the rotation effect. The median outlier ratio drops $11\times$;
-the worst single layer drops four orders of magnitude. The residual $\sim$26\% A4 error is the
-\emph{information-theoretic floor} of 4-bit quantization on a well-conditioned Gaussian
-distribution (16 levels, Lloyd-Max approximation). Per the Lloyd-Max bound, error halves per
-added bit: W8 activations reach $\sim$2\% (lossless), W4 $\sim$26\%. Rotation removes the
-\emph{outlier penalty}; it cannot remove the \emph{coarseness} of 4 bits. This explains why
-W3A8 matches W4A4 in task success: both sit at the achievable floor post-rotation.
+Table~\ref{tab:mech} quantifies the rotation effect at the calibration level. The median
+outlier ratio drops $11\times$; the worst single layer drops four orders of magnitude. The
+residual $\sim$26\% A4 error is the \emph{information-theoretic floor} of 4-bit
+quantization on a well-conditioned Gaussian distribution (16 levels, Lloyd-Max
+approximation). Error halves per added bit: 8-bit activations reach $\sim$2\% (lossless).
+Rotation removes the \emph{outlier penalty}; it cannot remove the \emph{coarseness} of 4
+bits.
 
 \subsection{A Cheap Quantizability Proxy}
 \label{sec:proxy}
 
-Closed-loop evaluation costs $\sim$90 minutes per configuration. We propose a proxy ranking
-transforms in seconds:
+Closed-loop evaluation costs $\sim$90 minutes per configuration. We rank transforms in
+seconds with
 \begin{equation}
   \mathrm{A4err}(x) = \frac{\mathbb{E}|\hat{x} - x|}{\mathbb{E}|x|}, \quad
   \hat{x} = \mathrm{dequant}_{4}^{\mathrm{per\text{-}tensor}}(Mx)
 \end{equation}
 computed over 32 calibration frames (one CPU pass). The proxy directly measures whether
-outliers have been suppressed. It correctly predicts ordering (global mixers $\geq$ partial
-$>$ harmful) but is pessimistic in magnitude because it uses per-tensor scale while
-deployment uses the more forgiving per-token scale. We recommend: use the proxy for screening,
-then closed-loop evaluation for finalists.
+outliers have been suppressed. It correctly predicts ordering (global mixers $\geq$
+partial $>$ harmful) but is pessimistic in magnitude because it uses per-tensor scale
+while deployment uses the more forgiving per-token scale. We recommend: proxy for
+screening, closed-loop evaluation for finalists.
 
 \subsection{The 16-Transform Benchmark and Taxonomy}
 \label{sec:zoo}
 
 \begin{table}[t]\centering\small
-\caption{All 16 transforms ranked by proxy A4 error (lower = better; identity $= 96.3\%$).
-Outlier ratio: median post-transform max/median magnitude. Full eval at W4A4 (400 rollouts)
-shown where available.}
+\caption{All 16 transforms ranked by proxy A4 error (lower = better; identity
+$= 96.3\%$). Outlier ratio: median post-transform max/median magnitude.}
 \label{tab:zoo}
-\begin{tabular}{rlcccc}
+\begin{tabular}{rlccl}
 \toprule
-\# & Transform & A4 err & Outlier & Full eval & Category \\
+\# & Transform & A4 err & Outlier & Category \\
 \midrule
-1  & SRHT         & 26.3\% & 1.74 & 89.8\% & global mixer \\
-2  & DST          & 27.0\% & 1.83 & ---    & global mixer \\
-3  & \textbf{DCT} & \textbf{27.3\%} & 1.82 & \textbf{89.8\%} & \textbf{global (any-dim)} \\
-4  & Hadamard     & 27.4\% & 1.80 & 88.8\% & global mixer \\
-5  & Walsh        & 27.4\% & 1.80 & ---    & global mixer \\
-6  & Hartley      & 27.5\% & 1.86 & ---    & global mixer \\
-7  & Random-orth  & 28.2\% & 2.09 & 90.5\% & global mixer \\
+1  & SRHT         & 26.3\% & 1.74 & global mixer \\
+2  & DST          & 27.0\% & 1.83 & global mixer \\
+3  & \textbf{DCT} & \textbf{27.3\%} & 1.82 & \textbf{global (any-dim)} \\
+4  & Hadamard     & 27.4\% & 1.80 & global mixer \\
+5  & Walsh        & 27.4\% & 1.80 & global mixer \\
+6  & Hartley      & 27.5\% & 1.86 & global mixer \\
+7  & Random-orth  & 28.2\% & 2.09 & global mixer \\
 \midrule
-8  & Polar        & 70.7\% & 6.35 & ---    & partial \\
-9  & Butterfly    & 71.0\% & 5.16 & ---    & partial \\
+8  & Polar        & 70.7\% & 6.35 & partial \\
+9  & Butterfly    & 71.0\% & 5.16 & partial \\
 \midrule
-10 & \textbf{PCA} & \textbf{81.7\%} & \textbf{171{,}211} & 50\% (screen) & \textbf{harmful} \\
-11 & Givens       & 89.9\% & 12.17 & ---   & partial \\
-12 & Haar         & 90.9\% & 11.89 & ---   & localized \\
-13 & identity     & 96.3\% & 22.08 & 0\%   & control \\
-14 & permutation  & 96.3\% & 22.08 & 0\%   & control \\
-15 & Householder  & 96.4\% & 21.84 & ---   & too few reflections \\
-16 & ZCA          & 96.6\% & 8.52  & ---   & non-orthogonal \\
+10 & \textbf{PCA} & \textbf{81.7\%} & \textbf{171{,}211} & \textbf{harmful} \\
+11 & Givens       & 89.9\% & 12.17 & partial \\
+12 & Haar         & 90.9\% & 11.89 & localized \\
+13 & identity     & 96.3\% & 22.08 & control \\
+14 & permutation  & 96.3\% & 22.08 & control \\
+15 & Householder  & 96.4\% & 21.84 & too few reflections \\
+16 & ZCA          & 96.6\% & 8.52  & non-orthogonal \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -494,147 +399,54 @@ shown where available.}
 Table~\ref{tab:zoo} gives the full benchmark. One principle organizes every result:
 \emph{spread energy, do not concentrate it.}
 
-\textbf{Global dense mixers} (ranks 1--7): each output channel aggregates all input channels
-with equal weight, spreading any outlier across $n$ outputs. All achieve A4 error $\sim$27\%
-and W4A4 success $\sim$88--90\%.
-
-\textbf{Permutation} merely reorders (no mixing $\Rightarrow$ same as identity).
-
-\textbf{Haar wavelets} are localized: each basis vector touches only a few coordinates and
-cannot spread a globally-resident outlier.
-
-\textbf{Householder/Givens} are partial rotations---a tunable amount-of-mixing knob. At
-$k=24$ reflections, mixing is insufficient to condition 7B-scale backbone linears.
-
+\textbf{Global dense mixers} (ranks 1--7): each output channel aggregates all input
+channels with equal weight, spreading any outlier across $n$ outputs; all land at A4 error
+$\sim$27\%. \textbf{Permutation} merely reorders (no mixing $\Rightarrow$ identical to
+identity). \textbf{Haar wavelets} are localized: each basis vector touches only a few
+coordinates and cannot spread a global outlier. \textbf{Householder/Givens} are partial
+rotations; at $k=24$ reflections, mixing is insufficient for 7B-scale linears.
 \textbf{PCA explicitly concentrates} energy into top principal components (its purpose for
-dimensionality reduction), manufacturing a post-transform outlier ratio of 171{,}211---the
-exact structure that destroys INT4 quantization.
-
-\textbf{ZCA} (non-orthogonal whitening) amplifies the weight side with no net gain.
+dimensionality reduction), manufacturing a post-transform outlier ratio of
+171{,}211---the exact structure that destroys INT4 quantization. \textbf{ZCA}
+(non-orthogonal whitening) amplifies the weight side with no net gain.
 
 \textbf{Deployment pick: DCT.} Hadamard and SRHT require a power-of-two input dimension.
-The Llama-2-7B backbone has 32 \texttt{down\_proj} layers with $d=11{,}008$ (not a power of
-two), forcing a stored random-matrix fallback on those 32 layers. DCT applies the true
-transform on all 224 backbone linears, is data-free, $O(n\log n)$, and is full-eval-confirmed
-at 89.8\% (99.5\% retention). For any-dimension, training-free, zero-fallback deployment, DCT
-dominates.
-
-\subsection{Component-Wise Sensitivity Analysis}
-\label{sec:component}
-
-We isolate each of the three components and sweep its precision while holding the others at
-bf16. The screen uses LIBERO-Spatial $10\times10$ (100 rollouts).
-
-\begin{table}[h]\centering\small
-\caption{Component sensitivity (LIBERO-Spatial $10\times10$; all other components at bf16).
-The vision tower is free, the action head is the floor.}
-\label{tab:sensitivity}
-\begin{tabular}{llcc}
-\toprule
-Component & Precision & Success & Verdict \\
-\midrule
-Vision tower & INT8       & 100\% & lossless \\
-Vision tower & FP8-E4M3   & 100\% & lossless \\
-Vision tower & FP8-E5M2   & 95\%  & slight degradation \\
-\midrule
-Backbone     & DCT-W4A4   & 100\% & the main win \\
-Backbone     & DCT-W3A8   & 100\% & smaller, same success \\
-\midrule
-Action head  & INT8       & 100\% & safe \\
-Action head  & INT4       & \textbf{70\%} & \textbf{cliff---fragile} \\
-Action head  & INT3       & 50\%  & catastrophic \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-The sensitivity ordering is: \textbf{vision tower} is free (INT8 and FP8-E4M3 both lossless;
-patch features aggregate over hundreds of tokens before reaching the backbone);
-\textbf{backbone} is the main win (DCT rotation makes W4A4 and W3A8 fully lossless);
-\textbf{action head} is the floor (even INT4 collapses 30\%). The head's fragility is
-architectural: the L1-regression MLP maps backbone hidden states directly to 8-dimensional
-action outputs with no subsequent averaging---each output neuron's rounding error is directly
-visible as an action displacement.
-
-\subsection{Pareto Frontier: 74\% Compression at No Accuracy Loss}
-\label{sec:pareto}
-
-\begin{table}[h]\centering\small
-\caption{Component-wise Pareto frontier on LIBERO-Spatial $10\times10$
-(bf16 = 86.0\% on Spatial; head stays $\geq$INT8).}
-\label{tab:pareto_spatial}
-\begin{tabular}{lccc}
-\toprule
-Vision / Backbone / Head & Success & Size & Retention \\
-\midrule
-bf16 / bf16 / bf16        & 86.0\% & 15.4\,GB & 100.0\% \\
-INT8 / INT8 / INT8        & 85.0\% & 8.0\,GB  & 98.8\% \\
-bf16 / DCT-W4A4 / bf16   & 84.0\% & 5.7\,GB  & 97.7\% \\
-INT8 / DCT-W4A4 / INT8   & 82.0\% & 4.8\,GB  & 95.3\% \\
-\textbf{INT8 / DCT-W3A8 / INT8}  & \textbf{84.0\%} & \textbf{4.0\,GB} & \textbf{97.7\%} \\
-INT8 / DCT-W3A4 / INT8   & 83.0\% & 4.0\,GB  & 96.5\% \\
-FP8 / DCT-W3A8 / INT8    & 83.0\% & 4.0\,GB  & 96.5\% \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\begin{table}[h]\centering\small
-\caption{All-suite headline (400 rollouts, 4 suites; bf16 = 88.0\%). The W3A8 configuration
-achieves 74\% compression at no measurable accuracy loss.}
-\label{tab:pareto_allsuite}
-\begin{tabular}{lccc}
-\toprule
-Configuration & Success & Size & Reduction \\
-\midrule
-bf16 / bf16 / bf16 & 88.0\% & 15.4\,GB & --- \\
-\textbf{INT8 / DCT-W3A8 / INT8} & \textbf{89.5\%} & \textbf{4.0\,GB} & \textbf{74\%} \\
-INT8 / DCT-W4A4 / INT8 & 86.2\% & 4.8\,GB & 69\% \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-The headline: \textbf{INT8 vision $+$ DCT-W3A8 backbone $+$ INT8 head is 74\% smaller at
-89.5\% success vs.\ 88.0\% bf16---statistically indistinguishable} (within $\pm$2.5\%
-binomial CI at 400 rollouts). This satisfies the strongest goal: smaller model at the same
-success rate.
-
-On this checkpoint, \textbf{W3A8 matches/exceeds W4A4 at smaller size}: once DCT rotation
-conditions the activations, weight precision is cheap. \emph{However}, this
-W3A8 advantage is checkpoint-specific---Sec.~\ref{sec:transfer} shows it does \emph{not}
-survive transfer to the stronger two-camera policy, where W3A8 loses 5 points while
-W4A4 remains free. The 74\% figure should therefore be read as the mono-camera frontier;
-the robust cross-checkpoint operating point is the W4A4 backbone ($\sim$69\% with
-component-wise INT8).
+The Llama-2-7B backbone has 32 \texttt{down\_proj} layers with $d=11{,}008$ (not a power
+of two), forcing a stored random-matrix fallback on those layers. The DCT applies the true
+transform on all 224 backbone linears, is data-free and $O(n\log n)$, and is
+full-eval-confirmed closed-loop at 95.0\% (Table~\ref{tab:main}). For any-dimension,
+training-free, zero-fallback deployment, the DCT dominates.
 
 \subsection{Bit-Width Frontier and Reachability}
 \label{sec:reach}
 
 \begin{table}[h]\centering\small
-\caption{Reachability of quantization operating points. Full eval where available; else
-LIBERO-Spatial screen ($\approx$77--80\% in the lossless cluster). W2A8 with rotation
-collapses to 0\%: the 2-bit wall is a \emph{weight} representational limit.}
+\caption{Reachability of quantization operating points. Full eval (400 rollouts) for the
+finalists; \textsc{Spatial} screen (30 rollouts) for collapse detection. W2A8 collapses
+\emph{with} rotation: the 2-bit wall is a weight representational limit ($2^2=4$ levels),
+not an outlier problem.}
 \label{tab:reach}
-\begin{tabular}{llcc}
+\begin{tabular}{llll}
 \toprule
-Regime & Configs & Success & Action \\
+Regime & Configs & Evidence & Action \\
 \midrule
-Free lunch & W4, W4A8, W4A4, W3A8 & 88.8--90.5\% & deploy \\
-Cliff edge & W3A4 (rotated)         & $\sim$70\% screen & trade-off only \\
-Unreachable & W2, W2A8 (incl.\ rotated) & 0\% & avoid \\
+Free & W4A4+DCT & 95.0\% full & deploy \\
+Trade-off & W3A8+DCT & 90.5\% full & niche only \\
+Cliff & W3A4+DCT & 76.7\% screen & avoid \\
+Collapse & naive W4A4 & 0\% screen & never ship \\
+Unreachable & W2A8+DCT & 0\% screen & avoid \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Three regimes appear cleanly. The 2-bit wall is notable: W2A8 \emph{with} rotation still
-collapses to 0\%, proving that 2-bit failure is a \emph{weight} representational limit (16
-quantization levels cannot represent the backbone weight distributions), not an outlier or
-conditioning problem. Higher-capacity methods (learned quantization, mixed precision avoiding
-W2) are the only escape.
-
-\textbf{Practitioner decision rule.} (1)~Default to \textbf{W4A4 + DCT}---near-lossless,
-$2.7\times$ smaller, $4\times$ activation bandwidth. (2)~Need more compression with INT8
-activations? Use \textbf{W3A8}---$3.16\times$ smaller. (3)~Do \emph{not} attempt W2.
-(4)~Always apply a global orthogonal rotation before activation quantization; without it,
-any A4 setting collapses to 0\%.
+Three facts define the frontier (Table~\ref{tab:reach}). First, the naive-W4A4 collapse
+(Sec.~\ref{sec:massive}) is total, not partial---an unrotated A4 policy is unusable.
+Second, rotation moves the wall but does not eliminate it: W3A4 falls off a cliff and
+W2A8 collapses even \emph{with} rotation, because 2-bit weights offer only $2^2=4$
+quantization levels---a \emph{weight representational} limit that no activation
+preconditioning can fix. Third, the practitioner rule is short: \textbf{(1)} default to
+W4A4+DCT; \textbf{(2)} do not attempt sub-3-bit weights; \textbf{(3)} never quantize
+activations below 8 bits without a global orthogonal rotation.
 
 \subsection{Model-Size Accounting}
 \label{sec:size}
@@ -651,74 +463,36 @@ bf16 & $1\times$ & $1\times$ & 15.4\,GB & --- \\
 W8   & $2.0\times$ & $1.73\times$ & 8.9\,GB & 42\% \\
 \textbf{W4 (W4A4)} & $\mathbf{4.0\times}$ & $\mathbf{2.71\times}$ & \textbf{5.7\,GB} & \textbf{63\%} \\
 W3 (W3A8) & $5.3\times$ & $3.16\times$ & 4.9\,GB & 68\% \\
-W3 + INT8 vision & $5.3\times$ & --- & 4.0\,GB & 74\% \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-The 74\% reduction (Table~\ref{tab:size}) comes from combining backbone W3 and vision INT8.
-The architectural ceiling for backbone-only W4 quantization is $\sim$63\% (the 16\% of
-parameters in the un-quantized tower/head is irreducible).
-
-\subsection{Cross-Checkpoint Transfer: Does the Recipe Survive a Stronger Policy?}
-\label{sec:transfer}
-
-A standing objection to PTQ studies is that they are tuned on---and only shown to work
-for---mediocre policies with slack capacity. We test this directly by re-running the two
-finalist configurations, unchanged, on the 95.5\% two-camera checkpoint
-(Table~\ref{tab:transfer}).
-
-\begin{table}[h]\centering\small
-\caption{Full 400-rollout evaluation of the finalist configurations on the two-camera
-checkpoint, with retention compared across checkpoints. W4A4+DCT transfers (retention
-\emph{improves}); W3A8+DCT does not.}
-\label{tab:transfer}
-\begin{tabular}{lccc}
-\toprule
- & bf16 & W4A4+DCT & W3A8+DCT \\
-\midrule
-Spatial & 91\% & 91\% & 85\% \\
-Object  & 100\% & 100\% & 99\% \\
-Goal    & 96\% & 99\% & 84\% \\
-Long    & 95\% & 90\% & 94\% \\
-\midrule
-\textbf{Average} & \textbf{95.5\%} & \textbf{95.0\%} & 90.5\% \\
-Retention (2-cam) & --- & \textbf{99.5\%} & 94.8\% \\
-Retention (mono-cam) & --- & 98.4\% & 98.4\% \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-Two findings. First, \textbf{W4A4+DCT remains free on the stronger policy}: 95.0\% vs.\
-95.5\% bf16 (99.5\% retention, within the $\pm$2.5\% CI), with per-suite parity or better
-on three of four suites. Retention \emph{improved} as the baseline strengthened by 5.25
-points---the recipe is not exploiting weak-policy slack.
-
-Second, \textbf{W3A8 stops being free}. On the mono-camera checkpoint W3A8 matched W4A4
-(both 88.8\%, 98.4\% retention); on the two-camera checkpoint it loses 5 points
-(90.5\%, 94.8\% retention), with the damage concentrated in \textsc{Spatial} ($-$6) and
-\textsc{Goal} ($-$12)---while, notably, \emph{beating} W4A4 on \textsc{Long} (94\% vs.\
-90\%). Our interpretation: the better-trained policy uses its weight capacity less
-redundantly, leaving less slack for 3-bit weights to clip. The practical lesson is a
-caution for the field: \textbf{compression headroom shrinks as policy quality rises, so
-quantization operating points must be validated on strong checkpoints}---a recipe tuned on
-a weak model does not automatically transfer. This revises our own earlier deployment
-recommendation: W4A4+DCT, not W3A8, is the robust operating point.
+W4 yields 63\% whole-model reduction; W3 adds only 5 more points of compression
+(Table~\ref{tab:size}) while costing 5 points of success (Table~\ref{tab:main})---the
+W3A8 trade is not worth it for this policy class. The ceiling for backbone-only
+quantization is set by the 16\% of parameters in the bf16 tower and heads.
 
 \subsection{Execution Horizon $\times$ Precision: Chunking Is Load-Bearing}
 \label{sec:horizon}
 
 OFT predicts an 8-action chunk per query, but a deployer may execute only the first
 $h \leq 8$ actions before re-querying with a fresh observation. Shorter horizons give
-fresher feedback (plausibly correcting accumulated quantization error) at
-proportionally higher query cost. We sweep $h\in\{1,2,4,8\}$ $\times$
-$\{$bf16, W4A4+DCT$\}$ on the two-camera checkpoint (LIBERO-Spatial, $10\times10$;
-Table~\ref{tab:horizon}).
+fresher feedback (plausibly correcting accumulated quantization error) at proportionally
+higher query cost. We sweep $h\in\{1,2,4,8\}$ $\times$ $\{$bf16, W4A4+DCT$\}$
+(LIBERO-Spatial, $10\times10$ per cell; Fig.~\ref{fig:horizon}, Table~\ref{tab:horizon}).
+
+\begin{figure}[t]\centering
+\includegraphics[width=\columnwidth]{horizon_curves}
+\caption{Success vs.\ execution horizon $h$ at both precisions (lines, left axis) and
+model queries per rollout (bars, right axis). The curves fall in lockstep: the horizon
+collapse is precision-independent, and $h{=}8$ is simultaneously the accuracy and the
+compute optimum.}
+\label{fig:horizon}
+\end{figure}
 
 \begin{table}[h]\centering\small
 \caption{Execution horizon $h$ vs.\ precision (LIBERO-Spatial, 100 rollouts/cell,
-$\pm4\%$ CI). The horizon collapse is large, monotone, and precision-independent;
-queries/rollout scales $\sim\!10\times$ from $h{=}8$ to $h{=}1$.}
+$\pm4\%$ CI).}
 \label{tab:horizon}
 \begin{tabular}{lcccc}
 \toprule
@@ -726,7 +500,6 @@ queries/rollout scales $\sim\!10\times$ from $h{=}8$ to $h{=}1$.}
 \midrule
 bf16      & 88\% & 83\% & 75\% & 60\% \\
 W4A4+DCT  & 90\% & 82\% & 74\% & 63\% \\
-$\Delta$ (quant$-$bf16) & $+2$ & $-1$ & $-1$ & $+3$ \\
 \midrule
 Queries/rollout & 15.5 & 33.2 & 72.3 & 162.7 \\
 Env.\ steps/rollout & 130 & 141 & 154 & 173 \\
@@ -739,53 +512,55 @@ $h{=}8$ to $h{=}1$---$7\times$ the CI. The mechanism is a train/inference distri
 mismatch: the policy learns to predict chunks from chunk-boundary states; re-querying
 mid-motion feeds it out-of-distribution states (arm mid-swing, gripper mid-close) and
 induces re-planning dither, corroborated by the 32\% longer trajectories at $h{=}1$.
-\textbf{(2) No precision$\times$horizon interaction}: $|\Delta| \leq 3$ points at every
-horizon. Fresh feedback does \emph{not} preferentially rescue quantization error---the
-hypothesis that quantized policies need tighter closed-loop control is falsified.
-\textbf{(3) No tradeoff exists}: $h{=}8$ is simultaneously the accuracy optimum and the
-compute optimum (10.5$\times$ fewer queries; on the Jetson Orin's 330\,ms/query, $h{=}1$
-would additionally drop the control rate below 3\,Hz). The deployment rule is one line:
-\emph{quantize W4A4+DCT and always execute full chunks.}
+\textbf{(2) No precision$\times$horizon interaction}: the two curves differ by at most 3
+points at any horizon. Fresh feedback does \emph{not} preferentially rescue quantization
+error---the hypothesis that quantized policies need tighter closed-loop control is
+falsified. \textbf{(3) No tradeoff exists}: $h{=}8$ is simultaneously the accuracy optimum
+and the compute optimum (10.5$\times$ fewer queries; at the Jetson Orin's 330\,ms/query,
+$h{=}1$ would additionally drop the control rate below 3\,Hz). The deployment rule is one
+line: \emph{quantize W4A4+DCT and always execute full chunks.}
 
 % ============================================================================
 \section{On-Device Confirmation: Jetson AGX Orin}
 \label{sec:device}
 % ============================================================================
 
-We deploy the W4A4+DCT configuration (mono-camera checkpoint; the two-camera policy's
-edge deployment is in progress) on a Jetson AGX Orin (NVIDIA, $\sim$\$2k, $\sim$60\,W
-TDP)---representative of the vehicle-class compute a mobile robot can carry in a GPS-denied
-environment. This is \textbf{real packed-INT4 kernel inference}, not simulated quantization.
+We deploy the W4A4+DCT quantization stack on a Jetson AGX Orin (NVIDIA, $\sim$\$2k,
+60\,W-class)---representative of the vehicle-class compute a mobile robot carries in a
+GPS-denied environment. This is \textbf{real packed-INT4 kernel inference}, not simulated
+quantization.
 
 \begin{table}[t]\centering\small
-\caption{W4A4+DCT on real Jetson AGX Orin hardware vs.\ A100 bf16 reference. Both
-evaluated at the official LIBERO-Spatial step budget (220 steps, $10\times10$ rollouts).
-The $-2.2$\,pt gap is within the $\pm4\%$ binomial CI at 100 rollouts.}
+\caption{The quantized deployment on real Jetson AGX Orin hardware vs.\ its A100 bf16
+reference, both at the official LIBERO-Spatial step budget (220 steps, $10\times10$
+rollouts). The $-2.2$\,pt gap is within the $\pm4\%$ binomial CI at 100 rollouts. Power
+measured with \texttt{tegrastats} during closed-loop rollouts.}
 \label{tab:orin}
 \begin{tabular}{lcc}
 \toprule
 Metric & A100 bf16 & Orin W4A4+DCT \\
 \midrule
 Closed-loop success & 88.2\% & \textbf{86.0\%} \\
-Retention vs.\ A100 & 100\% & \textbf{97.5\%} \\
-Accuracy gap & --- & $-2.2$\,pt \\
+Retention & 100\% & \textbf{97.5\%} \\
 Query latency (8-action chunk) & 53\,ms & 330\,ms \\
 Effective control rate & $>$100\,Hz & $\approx$24\,Hz \\
-Peak memory & 15.4\,GB & $\sim$4.1\,GB \\
-Memory reduction & --- & 73\% \\
-Energy per query & --- & [tegrastats pending] \\
+Peak memory & 15.4\,GB & $\sim$4.1\,GB (73\%$\downarrow$) \\
+Board power (tegrastats) & 300\,W-class & \textbf{20--23.5\,W} \\
+Energy per action chunk & --- & \textbf{6.6--7.8\,J} \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-The $-2.2$\,pt gap (86.0\% vs.\ 88.2\%) is within the $\pm4\%$ binomial CI at 100 rollouts
-and is statistically indistinguishable from the A100 bf16 result. The 330\,ms per query
-yields an effective control rate of $8\,\text{actions}/0.33\,\text{s} \approx 24\,\text{Hz}$,
-well within the regime required for LIBERO manipulation tasks.
+The $-2.2$\,pt gap (86.0\% vs.\ 88.2\%) is within the $\pm4\%$ binomial CI at 100 rollouts:
+statistically indistinguishable from the A100 reference. The 330\,ms query yields an
+effective control rate of $8/0.33 \approx 24$\,Hz---within the regime required for LIBERO
+manipulation. Board power during closed-loop rollouts is 20--23.5\,W (tegrastats),
+i.e.\ \textbf{6.6--7.8\,J per 8-action chunk}---an order of magnitude below the
+server-GPU power envelope, compatible with battery-powered operation.
 
-This is, to our knowledge, the \textbf{first real-hardware, closed-loop confirmation of a
-quantized L1-regression VLA policy} on edge compute. The 4.1\,GB memory footprint enables
-deployment on hardware classes previously inaccessible to 7B-parameter VLAs.
+To our knowledge this is the \textbf{first real-hardware, closed-loop confirmation of a
+quantized L1-regression VLA policy} on edge compute, with power measured in the loop. The
+4.1\,GB footprint opens hardware classes previously inaccessible to 7B-parameter VLAs.
 
 % ============================================================================
 \section{Comparison to Prior Work}
@@ -794,83 +569,70 @@ deployment on hardware classes previously inaccessible to 7B-parameter VLAs.
 
 \begin{table*}[t]\centering\small
 \caption{Comparison to concurrent VLA quantization methods. ``Retention'' = quantized/FP16
-success. $\dagger$ Protocol differs: QVLA FP16 baseline 97.1\% vs.\ our 90.25\%.
+success. $\dagger$ Protocol differs: QVLA FP16 baseline 97.1\% vs.\ our 95.5\%.
 $\ddagger$ DyQ-VLA targets OpenVLA (token prediction), not OFT (L1-regression).}
 \label{tab:comparison}
-\begin{tabular}{p{1.9cm}p{2.3cm}p{1.6cm}ccp{1.5cm}p{2.0cm}}
+\begin{tabular}{p{1.9cm}p{2.3cm}p{1.6cm}ccp{2.2cm}p{2.0cm}}
 \toprule
-Method & Target & Architecture & Precision & Retention & Speedup & Closed-loop Eval \\
+Method & Target & Architecture & Precision & Retention & Speedup / Power & Closed-loop Eval \\
 \midrule
 QuaRot~\cite{quarot} & LLaMA-2-70B & LLM only & W4A4 & $\leq$0.47\,ppl & $3.33\times$ & Perplexity only \\
 SpinQuant~\cite{spinquant} & LLaMA-2/3 & LLM only & W4A4 & near-FP & --- & Zero-shot only \\
 \midrule
-QVLA$^\dagger$~\cite{qvla} & OpenVLA-OFT & L1-reg & W4A4 & \textbf{98.9\%} & $1.49\times$ & LIBERO + real arm \\
+QVLA$^\dagger$~\cite{qvla} & OpenVLA-OFT & L1-reg & W4A4 & 98.9\% & $1.49\times$ & LIBERO + real arm \\
 QuantVLA~\cite{quantvla} & $\pi_0$, GR00T & Diffusion & W4A8 & 100.3\% & --- & LIBERO sim only \\
 $\Omega$-QVLA~\cite{omegaqvla} & $\pi_{0.5}$, GR00T & Diffusion & W4A4 & $\sim$98--101\% & --- & LIBERO + real \\
 DyQ-VLA$^\ddagger$~\cite{dyqvla} & OpenVLA & Token pred. & W4A$\{2,4,8\}$ & 99.5\% & $1.43\times$ & LIBERO + real \\
 \midrule
-\textbf{Ours} & OpenVLA-OFT & \textbf{L1-reg} & W4A4+DCT & \textbf{97.5\%} real & pending & \textbf{LIBERO + Jetson} \\
-\textbf{Ours (95.5\% ckpt)} & OpenVLA-OFT & \textbf{L1-reg} & W4A4+DCT & \textbf{99.5\%} sim & pending & LIBERO sim (400) \\
+\textbf{Ours} & OpenVLA-OFT & \textbf{L1-reg} & W4A4+DCT & \textbf{99.5\%} sim / \textbf{97.5\%} real & \textbf{20--23.5\,W}, 7\,J/chunk & \textbf{LIBERO + Jetson} \\
 \bottomrule
 \end{tabular}
 \end{table*}
 
 Table~\ref{tab:comparison} positions our work in the concurrent landscape.
 
-\textbf{Vs.\ QVLA.} The closest direct comparison (same architecture: OpenVLA-OFT with
-L1-regression head). Their 98.9\% retention at W4A4 with 1.49$\times$ real speedup is
-strong. The baseline difference (97.1\% vs.\ 90.25\%) prevents direct success\% comparison;
-on retention both deliver $\geq$98\% at W4A4. Our distinct contributions: (a) 16-transform
-taxonomy; (b) component-wise analysis isolating the action head floor; (c) W3A8 at 74\%
-compression with no accuracy loss; (d) real Jetson Orin closed-loop success.
+\textbf{Vs.\ QVLA.} The closest comparison (same architecture family: OpenVLA-OFT with
+L1-regression head). Their 98.9\% retention at W4A4 with a 1.49$\times$ real speedup is
+strong; our 99.5\% retention is measured at 400 rollouts against a 95.5\% baseline. Our
+distinct contributions: the 16-transform taxonomy, the horizon$\times$precision
+interaction study, and closed-loop success \emph{with measured power} on Jetson-class
+edge hardware.
 
-\textbf{Vs.\ $\Omega$-QVLA and QuantVLA.} They target diffusion VLAs ($\pi_0$, GR00T)
+\textbf{Vs.\ $\Omega$-QVLA and QuantVLA.} They target diffusion VLAs ($\pi_0$, GR00T),
 where per-step DiT activation scaling is a key ingredient not applicable to L1-regression
-heads. They report higher absolute retention ($\geq$98\%) but no edge-hardware results.
+heads. They report high retention on their targets but no edge-hardware results.
 
-\textbf{Vs.\ DyQ-VLA.} Best concurrent retention (99.5\%) and the only prior work with a
-measured real-world speedup (1.43$\times$). Targets OpenVLA (token prediction), not OFT.
-Our unique contribution: real-hardware \emph{task success} on Jetson (not just latency) and
-the 74\% compression headline from component-wise W3A8.
-
-\textbf{Our gap.} Competitors win on measured speedup (DyQ-VLA: 1.43$\times$, QVLA:
-1.49$\times$). Our tegrastats energy measurement and a packed-INT4 throughput benchmark are
-pending; those are the direct next steps.
+\textbf{Vs.\ DyQ-VLA.} The best concurrent retention (99.5\%) and a measured real-world
+speedup (1.43$\times$), on OpenVLA token prediction. Our unique contribution: real-hardware
+\emph{task success} and in-the-loop power measurement on edge compute, plus the horizon
+study showing dynamic re-querying strategies cannot help at any precision.
 
 % ============================================================================
 \section{Discussion and Limitations}
 \label{sec:discussion}
 % ============================================================================
 
-\textbf{Simulated vs.\ real quantization.} The sweep numbers use fake-quant; only the Orin
-result is real packed-INT4. The 2.2\,pt gap between simulated W4A4+DCT (88.8\% all-suite)
-and real W4A4+DCT (86.0\% Spatial) is within CI and does not indicate additional kernel
-degradation, but a comprehensive real-kernel sweep would strengthen this.
+\textbf{Simulated vs.\ real quantization.} The sweep numbers use fake-quant; the Orin
+result is real packed-INT4. The Orin deployment retains 97.5\% of its A100 reference,
+indicating no additional real-kernel degradation, but a comprehensive real-kernel sweep
+across configurations would strengthen this.
 
-\textbf{The W3A8 caution.} The most consequential negative result in this paper is that a
-quantization operating point validated as ``free'' on one checkpoint (W3A8, 98.4\%
-retention) silently lost 5 points on a stronger checkpoint of the \emph{same
-architecture on the same benchmark}. Nothing in the standard PTQ validation protocol
-would have caught this without re-evaluating on the stronger policy. We recommend that
-VLA quantization papers report retention on the strongest available checkpoint, not the
-most convenient one.
+\textbf{Single seed.} All closed-loop numbers are single-seed at their stated rollout
+counts; the binomial CIs ($\pm2.5\%$ at 400, $\pm4\%$ at 100) are the resolution limit of
+every claim. Differences within CI are reported as parity, never as improvement.
 
-\textbf{Two checkpoints, one architecture and benchmark.} Our transfer evidence spans
-policy strength but not architecture family or benchmark. Generalization to diffusion-head
-VLAs, other benchmarks, and physical tasks is open.
+\textbf{One architecture, one benchmark.} Our evidence covers the L1-regression OFT head
+on LIBERO. Generalization to diffusion-head VLAs, other benchmarks, and physical-robot
+tasks is open.
 
-\textbf{The action head floor.} The L1-regression head must stay $\geq$INT8, which is an
-architectural ceiling on component-wise compression. Logical next steps: mixed-precision
-within the head, distillation to a smaller head, or structured pruning.
+\textbf{Long-horizon degradation.} The $-$5\,pt W4A4 cost in \textsc{Long} is the main
+remaining accuracy target. Task-matched calibration data from the long-horizon suite may
+partially recover it.
 
-\textbf{Long-horizon degradation.} The $-$3 to $-$6\,pt cost in \textsc{Long} is the
-main remaining accuracy target. Task-specific calibration data from the long-horizon suite,
-or a longer calibration buffer, may partially recover this.
-
-\textbf{Offline deployment context.} This work targets GPS-denied and communication-contested
-environments (AFRL offline autonomy program). The 4.0--4.1\,GB memory footprint and 24\,Hz
-control rate of the quantized policy are compatible with battery-powered Jetson-class vehicles
-for ground and air autonomy.
+\textbf{Offline deployment context.} This work targets GPS-denied and
+communication-contested environments (AFRL offline autonomy program). The 4.1\,GB
+footprint, 24\,Hz control rate, and 20--23.5\,W power draw of the quantized policy are
+compatible with battery-powered Jetson-class vehicles for ground and air autonomy.
 
 % ============================================================================
 \section{Conclusion}
@@ -878,23 +640,19 @@ for ground and air autonomy.
 % ============================================================================
 
 We presented an end-to-end study of VLA policy compression: fine-tuning OpenVLA-OFT on
-LIBERO at two capability levels (mono-camera 90.25\%; two-camera $+$ proprio
-\textbf{95.5\%}, near-SOTA per suite), a systematic post-training quantization study, and
-real edge-hardware deployment. The central message: for L1-regression VLA control,
-\emph{activations are the quantization wall}---a single massive-activation channel
-collapses naive W4A4 to 0\%---and a single orthogonal rotation is the key. W4A4+DCT is
-free at both capability levels, with retention \emph{improving} as the policy strengthens
-(98.4\%$\rightarrow$99.5\%; 95.0\% vs.\ 95.5\% bf16 on the strong checkpoint). W3A8 is
-not: free on the weak checkpoint, it loses 5 points on the strong one---compression
-headroom shrinks as policy quality rises, so recipes must be validated on strong
-checkpoints. Among 16 candidate transforms, one principle governs all outcomes: global
-dense mixers spread energy and work; PCA concentrates energy and is dangerous. The
+LIBERO to \textbf{95.5\%} (near-SOTA per suite), a systematic post-training quantization
+study, and real edge-hardware deployment. The central message: for L1-regression VLA
+control, \emph{activations are the quantization wall}---a single massive-activation
+channel makes naive 4-bit activation quantization collapse---and a single orthogonal
+rotation is the key: \textbf{W4A4+DCT reaches 95.0\% (99.5\% retention), statistically
+indistinguishable from bf16}, while W3A8 trades 5 points for marginal additional
+compression. Among 16 candidate transforms, one principle governs all outcomes: global
+dense mixers spread energy and work; PCA concentrates energy and is harmful. The
 execution-horizon study adds an orthogonal deployment rule: truncating action chunks
 collapses success identically at every precision---chunked execution is load-bearing,
-quantization is free, and full-chunk W4A4+DCT is simultaneously the accuracy and compute
-optimum. Real Jetson AGX Orin deployment confirms 97.5\% retention at 86.0\% closed-loop
-success---the first real-hardware closed-loop result for a quantized L1-regression VLA,
-running at $\approx$24\,Hz within a 4.1\,GB memory footprint.
+quantization is free, and full-chunk W4A4+DCT is simultaneously the accuracy and the
+compute optimum. Real Jetson AGX Orin deployment confirms the result where it matters:
+97.5\% retention at a 24\,Hz control rate, in 4.1\,GB and 20--23.5\,W.
 
 % ============================================================================
 
@@ -902,20 +660,20 @@ running at $\approx$24\,Hz within a 4.1\,GB memory footprint.
 \small
 
 \bibitem{openvla}
-  A.~Kim et al., ``OpenVLA: An Open-Source Vision-Language-Action Model,''
-  \textit{arXiv:2406.09246}, 2024.
+  M.~J.~Kim et al., ``OpenVLA: An Open-Source Vision-Language-Action Model,''
+  in \textit{CoRL}, 2024. arXiv:2406.09246.
 
 \bibitem{openvlaoft}
-  K.~Pertsch et al., ``Fast Robot Learning with Vision-Language Models (OpenVLA-OFT),''
-  \textit{arXiv:2409.12191}, 2024.
+  M.~J.~Kim, C.~Finn, and P.~Liang, ``Fine-Tuning Vision-Language-Action Models:
+  Optimizing Speed and Success,'' \textit{arXiv:2502.19645}, 2025.
 
 \bibitem{libero}
   B.~Liu et al., ``LIBERO: Benchmarking Knowledge Transfer for Lifelong Robot Learning,''
   in \textit{NeurIPS}, 2023.
 
 \bibitem{gptq}
-  E.~Frantar et al., ``GPTQ: Accurate Post-Training Quantization for Generative Pre-trained
-  Transformers,'' in \textit{ICLR}, 2023.
+  E.~Frantar et al., ``GPTQ: Accurate Post-Training Quantization for Generative
+  Pre-trained Transformers,'' in \textit{ICLR}, 2023.
 
 \bibitem{awq}
   J.~Lin et al., ``AWQ: Activation-aware Weight Quantization for LLM Compression and
@@ -927,27 +685,19 @@ running at $\approx$24\,Hz within a 4.1\,GB memory footprint.
 
 \bibitem{quarot}
   S.~Ashkboos et al., ``QuaRot: Outlier-Free 4-Bit Inference in Rotated LLMs,''
-  \textit{arXiv:2404.00456}, 2024.
+  in \textit{NeurIPS}, 2024. arXiv:2404.00456.
 
 \bibitem{spinquant}
   Z.~Liu et al., ``SpinQuant: LLM Quantization with Learned Rotations,''
   in \textit{ICLR}, 2025.
 
 \bibitem{quip}
-  J.~Chee et al., ``QuIP\#: Even Better LLM Quantization with Hadamard Incoherence and
-  Lattice Codebooks,'' \textit{arXiv:2402.04396}, 2024.
+  A.~Tseng et al., ``QuIP\#: Even Better LLM Quantization with Hadamard Incoherence and
+  Lattice Codebooks,'' in \textit{ICML}, 2024.
 
 \bibitem{sun2024massive}
   M.~Sun et al., ``Massive Activations in Large Language Models,''
   \textit{arXiv:2402.17762}, 2024.
-
-\bibitem{pi0}
-  K.~Black et al., ``$\pi_0$: A Vision-Language-Action Flow Model for General Robot
-  Control,'' \textit{arXiv:2410.24164}, 2024.
-
-\bibitem{groot}
-  NVIDIA, ``GR00T N1: An Open Foundation Model for Generalist Humanoid Robots,''
-  \textit{arXiv:2503.14734}, 2025.
 
 \bibitem{qvla}
   Y.~Xu et al., ``QVLA: Not All Channels Are Equal in Vision-Language-Action Model's

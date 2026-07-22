@@ -305,8 +305,14 @@ def main(args):
         if str(_QE_DIR) not in sys.path:
             sys.path.insert(0, str(_QE_DIR))
         from quant_advanced import Transform
-        w_bits, a_bits = {"w4a4_dct": (4, 4), "w3a8_dct": (3, 8)}[args.quant]
-        Transform("dct", w_bits=w_bits, a_bits=a_bits).apply(model)
+        kind, w_bits, a_bits = {
+            "w4a4_dct":   ("dct", 4, 4),
+            "w3a8_dct":   ("dct", 3, 8),
+            "w3a4_dct":   ("dct", 3, 4),
+            "w2a8_dct":   ("dct", 2, 8),
+            "w4a4_naive": ("identity", 4, 4),  # no rotation — the collapse control
+        }[args.quant]
+        Transform(kind, w_bits=w_bits, a_bits=a_bits).apply(model)
 
     with open(args.action_stats) as f:
         action_stats = json.load(f)
@@ -392,8 +398,10 @@ def parse_args():
                    help="Execute only the first h actions per chunk before re-querying "
                         "(default: full chunk). The knob for the chunk x quant study.")
     p.add_argument("--quant", default="none",
-                   choices=["none", "w4a4_dct", "w3a8_dct"],
-                   help="Fake-quantize the backbone with DCT rotation before eval.")
+                   choices=["none", "w4a4_dct", "w3a8_dct", "w3a4_dct", "w2a8_dct",
+                            "w4a4_naive"],
+                   help="Fake-quantize the backbone before eval (DCT rotation, or "
+                        "identity for the naive control).")
     p.add_argument("--gpu", type=int, default=0)
     return p.parse_args()
 

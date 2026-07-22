@@ -180,3 +180,25 @@ confirmation (86.0%, 97.5% retention). → main-venue publishable core.
 1. **Energy (J/inference) via tegrastats** — the one open lane vs all competitors.
 2. Second model or benchmark; 2–3 seeds for error bars.
 3. Head-to-head vs QVLA (2602.03782) / QuantVLA (2602.20309).
+
+## 7. 2-cam epoch_003 quant table (2026-07-16/22) — the upgraded headline
+
+Same quant machinery (`Transform("dct", w, a)`), applied to the 2-cam+proprio checkpoint
+(`checkpoints/openvla_oft_libero_2cam/epoch_003`, bf16 95.5%). Full 400-rollout evals via
+`02B_eval_libero_2cam.py --quant {w4a4_dct,w3a8_dct}`:
+
+| suite | bf16 | W4A4+DCT | W3A8+DCT |
+|---|---|---|---|
+| libero_spatial | 91 | 91 | 85 |
+| libero_object | 100 | 100 | 99 |
+| libero_goal | 96 | 99 | 84 |
+| libero_long | 95 | 90 | 94 |
+| **average** | **95.5** | **95.0** | **90.5** |
+| retention | — | **99.5%** | 94.8% |
+
+**W4A4+DCT retention held (98.4% → 99.5%) as the baseline improved 5 pts** — kills the
+"quantization only works on weak models" objection. **W3A8 is no longer free** on the
+stronger model (was 98.4% retention mono-cam, now 94.8%; −6/−12 on spatial/goal though it
+*beats* W4A4 on long, 94 vs 90). Hypothesis: better-trained model uses weight capacity
+less redundantly — don't tune quant recipes on weak checkpoints. Deployment pick: W4A4+DCT.
+Raw: `results/full_2cam_epoch003{,_w4a4_dct,_w3a8_dct}.csv`.
